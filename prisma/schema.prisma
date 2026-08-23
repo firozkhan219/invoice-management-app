@@ -1,0 +1,835 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(uuid()) @db.Char(36)
+  email           String   @unique @db.VarChar(320)
+  name            String?  @db.VarChar(160)
+  passwordHash    String   @map("password_hash") @db.VarChar(255)
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  sessions      Session[]
+  memberships   OrganisationMember[]
+  invitations   OrganisationInvitation[] @relation("InvitationInviter")
+  auditLogs     AuditLog[]
+  lockedPeriods LockedPeriod[] @relation("LockedPeriodCreator")
+  invoiceNumberVoids InvoiceNumberVoid[] @relation("InvoiceNumberVoidCreator")
+  createdInvoices Invoice[] @relation("InvoiceCreator")
+  updatedInvoices Invoice[] @relation("InvoiceUpdater")
+  issuedInvoices Invoice[] @relation("InvoiceIssuer")
+  cancelledInvoices Invoice[] @relation("InvoiceCanceller")
+  invoiceRevisions InvoiceRevision[]
+  createdCreditNotes CreditNote[] @relation("CreditNoteCreator")
+  updatedCreditNotes CreditNote[] @relation("CreditNoteUpdater")
+  issuedCreditNotes CreditNote[] @relation("CreditNoteIssuer")
+  generatedDocuments GeneratedDocument[]
+  createdPayments Payment[] @relation("PaymentCreator")
+  reversedPayments Payment[] @relation("PaymentReverser")
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid()) @db.Char(36)
+  userId       String   @map("user_id") @db.Char(36)
+  tokenHash    String   @unique @map("token_hash") @db.Char(64)
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  lastSeenAt   DateTime @default(now()) @map("last_seen_at")
+  userAgent    String?  @map("user_agent") @db.VarChar(255)
+  ipAddress    String?  @map("ip_address") @db.VarChar(64)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  id        String   @id @default(uuid()) @db.Char(36)
+  email     String   @db.VarChar(320)
+  tokenHash String   @unique @map("token_hash") @db.Char(64)
+  purpose   String   @db.VarChar(40)
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([email, purpose, expiresAt])
+  @@map("verification_tokens")
+}
+
+model Organisation {
+  id                 String   @id @default(uuid()) @db.Char(36)
+  name               String   @db.VarChar(180)
+  slug               String   @unique @db.VarChar(120)
+  locale             String   @default("en-IN") @db.VarChar(20)
+  timeZone           String   @default("Asia/Kolkata") @map("time_zone") @db.VarChar(80)
+  defaultCurrency    String   @default("INR") @map("default_currency") @db.Char(3)
+  financialYearStart Int      @default(4) @map("financial_year_start")
+  planStatus         String   @default("trial") @map("plan_status") @db.VarChar(40)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  members     OrganisationMember[]
+  invitations OrganisationInvitation[]
+  auditLogs   AuditLog[]
+  fileAssets  FileAsset[]
+  companies   Company[]
+  bankAccounts CompanyBankAccount[]
+  buyers Buyer[]
+  buyerAddresses BuyerAddress[]
+  units Unit[]
+  taxRates TaxRate[]
+  items Item[]
+  settings OrganisationSettings?
+  lockedPeriods LockedPeriod[]
+  invoiceNumberSeries InvoiceNumberSeries[]
+  creditNoteNumberSeries CreditNoteNumberSeries[]
+  invoiceNumberVoids InvoiceNumberVoid[]
+  invoices Invoice[]
+  invoiceItems InvoiceItem[]
+  invoiceRevisions InvoiceRevision[]
+  creditNotes CreditNote[]
+  creditNoteLines CreditNoteLine[]
+  generatedDocuments GeneratedDocument[]
+  payments Payment[]
+  paymentAllocations PaymentAllocation[]
+
+  @@map("organisations")
+}
+
+model OrganisationMember {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  userId         String   @map("user_id") @db.Char(36)
+  role           MemberRole
+  status         MemberStatus @default(active)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, userId])
+  @@index([userId, status])
+  @@map("organisation_members")
+}
+
+model OrganisationInvitation {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  email          String   @db.VarChar(320)
+  role           MemberRole
+  tokenHash      String   @unique @map("token_hash") @db.Char(64)
+  invitedById    String   @map("invited_by_id") @db.Char(36)
+  acceptedAt     DateTime? @map("accepted_at")
+  revokedAt      DateTime? @map("revoked_at")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitationInviter", fields: [invitedById], references: [id])
+
+  @@index([organisationId, email])
+  @@map("organisation_invitations")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String?  @map("organisation_id") @db.Char(36)
+  actorUserId    String?  @map("actor_user_id") @db.Char(36)
+  action         String   @db.VarChar(120)
+  entityType     String?  @map("entity_type") @db.VarChar(80)
+  entityId       String?  @map("entity_id") @db.VarChar(80)
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation? @relation(fields: [organisationId], references: [id])
+  actor        User?         @relation(fields: [actorUserId], references: [id])
+
+  @@index([organisationId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}
+
+model FileAsset {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  kind           String   @db.VarChar(40)
+  originalName   String   @map("original_name") @db.VarChar(255)
+  storageKey     String   @unique @map("storage_key") @db.VarChar(255)
+  mimeType       String   @map("mime_type") @db.VarChar(120)
+  byteSize       Int      @map("byte_size")
+  checksumSha256 String   @map("checksum_sha256") @db.Char(64)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  companyLogos Company[] @relation("CompanyLogo")
+  companySignatures Company[] @relation("CompanySignature")
+
+  @@index([organisationId, kind])
+  @@map("file_assets")
+}
+
+model Company {
+  id                    String   @id @default(uuid()) @db.Char(36)
+  organisationId        String   @map("organisation_id") @db.Char(36)
+  legalName             String   @map("legal_name") @db.VarChar(180)
+  tradingName           String?  @map("trading_name") @db.VarChar(180)
+  addressLine1          String   @map("address_line_1") @db.VarChar(180)
+  addressLine2          String?  @map("address_line_2") @db.VarChar(180)
+  city                  String   @db.VarChar(100)
+  state                 String   @db.VarChar(100)
+  stateCode             String?  @map("state_code") @db.VarChar(10)
+  postcode              String   @db.VarChar(20)
+  country               String   @default("India") @db.VarChar(80)
+  phone                 String?  @db.VarChar(40)
+  email                 String?  @db.VarChar(320)
+  gstin                 String?  @db.VarChar(15)
+  pan                   String?  @db.VarChar(10)
+  iec                   String?  @db.VarChar(20)
+  taxIdentifiers        Json?    @map("tax_identifiers")
+  logoAssetId           String?  @map("logo_asset_id") @db.Char(36)
+  signatureAssetId      String?  @map("signature_asset_id") @db.Char(36)
+  signatoryName         String?  @map("signatory_name") @db.VarChar(160)
+  signatoryDesignation  String?  @map("signatory_designation") @db.VarChar(120)
+  defaultDeclaration    String?  @map("default_declaration") @db.Text
+  defaultTerms          String?  @map("default_terms") @db.Text
+  isDefault             Boolean  @default(false) @map("is_default")
+  isActive              Boolean  @default(true) @map("is_active")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  logoAsset      FileAsset?   @relation("CompanyLogo", fields: [logoAssetId], references: [id], onDelete: SetNull)
+  signatureAsset FileAsset?   @relation("CompanySignature", fields: [signatureAssetId], references: [id], onDelete: SetNull)
+  bankAccounts   CompanyBankAccount[]
+  settingsDefaultFor OrganisationSettings[] @relation("SettingsDefaultCompany")
+  invoiceNumberSeries InvoiceNumberSeries[]
+  creditNoteNumberSeries CreditNoteNumberSeries[]
+  invoices Invoice[]
+
+  @@index([organisationId, isActive])
+  @@index([organisationId, isDefault])
+  @@map("companies")
+}
+
+model CompanyBankAccount {
+  id                       String   @id @default(uuid()) @db.Char(36)
+  organisationId           String   @map("organisation_id") @db.Char(36)
+  companyId                String   @map("company_id") @db.Char(36)
+  bankName                 String   @map("bank_name") @db.VarChar(160)
+  accountHolderName        String   @map("account_holder_name") @db.VarChar(180)
+  accountNumberCiphertext  String   @map("account_number_ciphertext") @db.Text
+  accountNumberIv          String   @map("account_number_iv") @db.VarChar(32)
+  accountNumberTag         String   @map("account_number_tag") @db.VarChar(32)
+  accountNumberLast4       String   @map("account_number_last4") @db.VarChar(4)
+  ifsc                     String?  @db.VarChar(11)
+  swiftBic                 String?  @map("swift_bic") @db.VarChar(20)
+  branchCode               String?  @map("branch_code") @db.VarChar(40)
+  branchName               String?  @map("branch_name") @db.VarChar(120)
+  branchAddress            String?  @map("branch_address") @db.Text
+  currency                 String   @default("INR") @db.Char(3)
+  isDefault                Boolean  @default(false) @map("is_default")
+  isActive                 Boolean  @default(true) @map("is_active")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  settingsDefaultFor OrganisationSettings[] @relation("SettingsDefaultBankAccount")
+  invoices Invoice[]
+  payments Payment[]
+
+  @@index([organisationId, companyId, isActive])
+  @@index([organisationId, isDefault])
+  @@map("company_bank_accounts")
+}
+
+model Buyer {
+  id                String   @id @default(uuid()) @db.Char(36)
+  organisationId    String   @map("organisation_id") @db.Char(36)
+  displayName       String   @map("display_name") @db.VarChar(180)
+  legalName         String?  @map("legal_name") @db.VarChar(180)
+  contactPerson     String?  @map("contact_person") @db.VarChar(160)
+  phone             String?  @db.VarChar(40)
+  email             String?  @db.VarChar(320)
+  gstin             String?  @db.VarChar(15)
+  pan               String?  @db.VarChar(10)
+  iec               String?  @db.VarChar(20)
+  customerReference String?  @map("customer_reference") @db.VarChar(80)
+  taxIdentifiers    Json?    @map("tax_identifiers")
+  notes             String?  @db.Text
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  addresses    BuyerAddress[]
+  invoices Invoice[]
+  consigneeInvoices Invoice[] @relation("InvoiceConsigneeBuyer")
+
+  @@index([organisationId, isActive])
+  @@index([organisationId, displayName])
+  @@map("buyers")
+}
+
+model BuyerAddress {
+  id               String   @id @default(uuid()) @db.Char(36)
+  organisationId   String   @map("organisation_id") @db.Char(36)
+  buyerId          String   @map("buyer_id") @db.Char(36)
+  label            String   @db.VarChar(120)
+  contactPerson    String?  @map("contact_person") @db.VarChar(160)
+  phone            String?  @db.VarChar(40)
+  email            String?  @db.VarChar(320)
+  addressLine1     String   @map("address_line_1") @db.VarChar(180)
+  addressLine2     String?  @map("address_line_2") @db.VarChar(180)
+  city             String   @db.VarChar(100)
+  state            String   @db.VarChar(100)
+  stateCode        String?  @map("state_code") @db.VarChar(10)
+  postcode         String   @db.VarChar(20)
+  country          String   @default("India") @db.VarChar(80)
+  isBillingDefault Boolean  @default(false) @map("is_billing_default")
+  isShippingDefault Boolean @default(false) @map("is_shipping_default")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  buyer        Buyer        @relation(fields: [buyerId], references: [id], onDelete: Restrict)
+  billingInvoices Invoice[] @relation("InvoiceBillingAddress")
+  shippingInvoices Invoice[] @relation("InvoiceShippingAddress")
+
+  @@index([organisationId, buyerId, isActive])
+  @@index([organisationId, buyerId, isBillingDefault])
+  @@index([organisationId, buyerId, isShippingDefault])
+  @@map("buyer_addresses")
+}
+
+model Unit {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  code           String   @db.VarChar(20)
+  name           String   @db.VarChar(80)
+  precision      Int      @default(2)
+  isDefault      Boolean  @default(false) @map("is_default")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  items        Item[]
+
+  @@unique([organisationId, code])
+  @@index([organisationId, isActive])
+  @@index([organisationId, isDefault])
+  @@map("units")
+}
+
+model TaxRate {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  name           String   @db.VarChar(120)
+  rate           Decimal  @db.Decimal(7, 4)
+  taxType        TaxType  @default(gst) @map("tax_type")
+  isDefault      Boolean  @default(false) @map("is_default")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  items        Item[]
+
+  @@index([organisationId, isActive])
+  @@index([organisationId, isDefault])
+  @@map("tax_rates")
+}
+
+model Item {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  sku            String?  @db.VarChar(80)
+  name           String   @db.VarChar(180)
+  description    String?  @db.Text
+  hsnSac         String?  @map("hsn_sac") @db.VarChar(20)
+  unitId         String?  @map("unit_id") @db.Char(36)
+  taxRateId      String?  @map("tax_rate_id") @db.Char(36)
+  saleRate       Decimal? @map("sale_rate") @db.Decimal(18, 4)
+  currency       String   @default("INR") @db.Char(3)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  unit         Unit?        @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  taxRate      TaxRate?     @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  invoiceItems InvoiceItem[]
+
+  @@unique([organisationId, sku])
+  @@index([organisationId, isActive])
+  @@index([organisationId, name])
+  @@map("items")
+}
+
+model OrganisationSettings {
+  id                         String         @id @default(uuid()) @db.Char(36)
+  organisationId             String         @unique @map("organisation_id") @db.Char(36)
+  defaultCompanyId           String?        @map("default_company_id") @db.Char(36)
+  defaultBankAccountId       String?        @map("default_bank_account_id") @db.Char(36)
+  defaultInvoiceTitle        String         @default("Tax Invoice") @map("default_invoice_title") @db.VarChar(120)
+  defaultTaxMode             TaxMode        @default(automatic) @map("default_tax_mode")
+  roundingPolicy             RoundingPolicy @default(nearest_rupee) @map("rounding_policy")
+  defaultDeclaration         String?        @map("default_declaration") @db.Text
+  defaultNotes               String?        @map("default_notes") @db.Text
+  paymentTerms               String?        @map("payment_terms") @db.Text
+  deliveryTerms              String?        @map("delivery_terms") @db.Text
+  pdfFooter                  String?        @map("pdf_footer") @db.Text
+  showPageNumbers            Boolean        @default(true) @map("show_page_numbers")
+  draftAutosave              Boolean        @default(true) @map("draft_autosave")
+  numberOnIssue              Boolean        @default(true) @map("number_on_issue")
+  allowManualNumberOverride  Boolean        @default(false) @map("allow_manual_number_override")
+  allowManualDateOverride    Boolean        @default(false) @map("allow_manual_date_override")
+  createdAt                  DateTime       @default(now()) @map("created_at")
+  updatedAt                  DateTime       @updatedAt @map("updated_at")
+
+  organisation       Organisation        @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  defaultCompany     Company?            @relation("SettingsDefaultCompany", fields: [defaultCompanyId], references: [id], onDelete: SetNull)
+  defaultBankAccount CompanyBankAccount? @relation("SettingsDefaultBankAccount", fields: [defaultBankAccountId], references: [id], onDelete: SetNull)
+
+  @@map("organisation_settings")
+}
+
+model LockedPeriod {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  name           String   @db.VarChar(120)
+  startsOn       DateTime @map("starts_on") @db.Date
+  endsOn         DateTime @map("ends_on") @db.Date
+  reason         String   @db.Text
+  isActive       Boolean  @default(true) @map("is_active")
+  createdById    String   @map("created_by_id") @db.Char(36)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  createdBy    User         @relation("LockedPeriodCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([organisationId, startsOn, endsOn])
+  @@index([organisationId, isActive])
+  @@map("locked_periods")
+}
+
+model InvoiceNumberSeries {
+  id             String          @id @default(uuid()) @db.Char(36)
+  organisationId String          @map("organisation_id") @db.Char(36)
+  companyId      String?         @map("company_id") @db.Char(36)
+  name           String          @db.VarChar(120)
+  pattern        String          @db.VarChar(120)
+  prefix         String?         @db.VarChar(40)
+  padding        Int             @default(4)
+  startingNumber Int             @default(1) @map("starting_number")
+  nextSequence   Int             @default(1) @map("next_sequence")
+  resetRule      SeriesResetRule @default(financial_year) @map("reset_rule")
+  lastResetKey   String?         @map("last_reset_key") @db.VarChar(20)
+  isDefault      Boolean         @default(false) @map("is_default")
+  isActive       Boolean         @default(true) @map("is_active")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  invoices     Invoice[]
+  voids        InvoiceNumberVoid[]
+
+  @@index([organisationId, companyId, isActive])
+  @@index([organisationId, isDefault])
+  @@map("invoice_number_series")
+}
+
+model CreditNoteNumberSeries {
+  id             String          @id @default(uuid()) @db.Char(36)
+  organisationId String          @map("organisation_id") @db.Char(36)
+  companyId      String?         @map("company_id") @db.Char(36)
+  name           String          @db.VarChar(120)
+  pattern        String          @db.VarChar(120)
+  prefix         String?         @db.VarChar(40)
+  padding        Int             @default(4)
+  startingNumber Int             @default(1) @map("starting_number")
+  nextSequence   Int             @default(1) @map("next_sequence")
+  resetRule      SeriesResetRule @default(financial_year) @map("reset_rule")
+  lastResetKey   String?         @map("last_reset_key") @db.VarChar(20)
+  isDefault      Boolean         @default(false) @map("is_default")
+  isActive       Boolean         @default(true) @map("is_active")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  creditNotes  CreditNote[]
+
+  @@index([organisationId, companyId, isActive])
+  @@index([organisationId, isDefault])
+  @@map("credit_note_number_series")
+}
+
+model InvoiceNumberVoid {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  seriesId       String   @map("series_id") @db.Char(36)
+  sequenceNumber Int      @map("sequence_number")
+  invoiceNumber  String   @map("invoice_number") @db.VarChar(120)
+  reason         String   @db.Text
+  createdById    String   @map("created_by_id") @db.Char(36)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  series       InvoiceNumberSeries @relation(fields: [seriesId], references: [id], onDelete: Restrict)
+  createdBy    User                @relation("InvoiceNumberVoidCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([organisationId, invoiceNumber])
+  @@unique([seriesId, sequenceNumber])
+  @@index([organisationId, createdAt])
+  @@map("invoice_number_voids")
+}
+
+model Invoice {
+  id                    String        @id @default(uuid()) @db.Char(36)
+  organisationId        String        @map("organisation_id") @db.Char(36)
+  companyId             String?       @map("company_id") @db.Char(36)
+  buyerId               String?       @map("buyer_id") @db.Char(36)
+  consigneeBuyerId      String?       @map("consignee_buyer_id") @db.Char(36)
+  billingAddressId      String?       @map("billing_address_id") @db.Char(36)
+  shippingAddressId     String?       @map("shipping_address_id") @db.Char(36)
+  bankAccountId         String?       @map("bank_account_id") @db.Char(36)
+  status                InvoiceStatus @default(draft)
+  seriesId              String?       @map("series_id") @db.Char(36)
+  invoiceNumber         String?       @map("invoice_number") @db.VarChar(120)
+  sequenceNumber        Int?          @map("sequence_number")
+  invoiceDate           DateTime      @map("invoice_date") @db.Date
+  dueDate               DateTime?     @map("due_date") @db.Date
+  financialYear         String?       @map("financial_year") @db.VarChar(20)
+  currency              String        @default("INR") @db.Char(3)
+  placeOfSupplyStateCode String?      @map("place_of_supply_state_code") @db.VarChar(10)
+  taxMode               TaxMode       @default(automatic) @map("tax_mode")
+  buyerOrderNumber      String?       @map("buyer_order_number") @db.VarChar(120)
+  buyerOrderDate        DateTime?     @map("buyer_order_date") @db.Date
+  exporterReference     String?       @map("exporter_reference") @db.VarChar(120)
+  preCarriageBy         String?       @map("pre_carriage_by") @db.VarChar(120)
+  placeOfReceipt        String?       @map("place_of_receipt") @db.VarChar(120)
+  vesselFlightNo        String?       @map("vessel_flight_no") @db.VarChar(120)
+  portOfLoading         String?       @map("port_of_loading") @db.VarChar(120)
+  portOfDischarge       String?       @map("port_of_discharge") @db.VarChar(120)
+  finalDestination      String?       @map("final_destination") @db.VarChar(120)
+  termsOfDelivery       String?       @map("terms_of_delivery") @db.Text
+  notes                 String?       @db.Text
+  declaration           String?       @db.Text
+  subtotal              Decimal       @default(0) @db.Decimal(18, 4)
+  invoiceDiscount       Decimal       @default(0) @map("invoice_discount") @db.Decimal(18, 4)
+  otherCharges          Decimal       @default(0) @map("other_charges") @db.Decimal(18, 4)
+  taxableTotal          Decimal       @default(0) @map("taxable_total") @db.Decimal(18, 4)
+  igstTotal             Decimal       @default(0) @map("igst_total") @db.Decimal(18, 4)
+  cgstTotal             Decimal       @default(0) @map("cgst_total") @db.Decimal(18, 4)
+  sgstTotal             Decimal       @default(0) @map("sgst_total") @db.Decimal(18, 4)
+  roundOff              Decimal       @default(0) @map("round_off") @db.Decimal(18, 4)
+  grandTotal            Decimal       @default(0) @map("grand_total") @db.Decimal(18, 4)
+  paidTotal             Decimal       @default(0) @map("paid_total") @db.Decimal(18, 4)
+  balanceDue            Decimal       @default(0) @map("balance_due") @db.Decimal(18, 4)
+  version               Int           @default(1)
+  companySnapshot       Json?         @map("company_snapshot")
+  buyerSnapshot         Json?         @map("buyer_snapshot")
+  consigneeSnapshot     Json?         @map("consignee_snapshot")
+  bankSnapshot          Json?         @map("bank_snapshot")
+  calculationSnapshot   Json?         @map("calculation_snapshot")
+  documentSnapshot      Json?         @map("document_snapshot")
+  createdById           String        @map("created_by_id") @db.Char(36)
+  updatedById           String?       @map("updated_by_id") @db.Char(36)
+  issuedById            String?       @map("issued_by_id") @db.Char(36)
+  issuedAt              DateTime?     @map("issued_at")
+  cancelledById         String?       @map("cancelled_by_id") @db.Char(36)
+  cancelledAt           DateTime?     @map("cancelled_at")
+  cancellationReason    String?       @map("cancellation_reason") @db.Text
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+
+  organisation    Organisation        @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  series          InvoiceNumberSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  company         Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  buyer           Buyer?              @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  consigneeBuyer  Buyer?              @relation("InvoiceConsigneeBuyer", fields: [consigneeBuyerId], references: [id], onDelete: SetNull)
+  billingAddress  BuyerAddress?       @relation("InvoiceBillingAddress", fields: [billingAddressId], references: [id], onDelete: SetNull)
+  shippingAddress BuyerAddress?       @relation("InvoiceShippingAddress", fields: [shippingAddressId], references: [id], onDelete: SetNull)
+  bankAccount     CompanyBankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  createdBy       User                @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy       User?               @relation("InvoiceUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  issuedBy        User?               @relation("InvoiceIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
+  cancelledBy     User?               @relation("InvoiceCanceller", fields: [cancelledById], references: [id], onDelete: SetNull)
+  items           InvoiceItem[]
+  revisions       InvoiceRevision[]
+  documents       GeneratedDocument[]
+  paymentAllocations PaymentAllocation[]
+  creditNotes CreditNote[] @relation("OriginalInvoiceCreditNotes")
+
+  @@index([organisationId, status, invoiceDate])
+  @@index([organisationId, buyerId])
+  @@index([organisationId, invoiceNumber])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  invoiceId      String   @map("invoice_id") @db.Char(36)
+  itemId         String?  @map("item_id") @db.Char(36)
+  sortOrder      Int      @map("sort_order")
+  sku            String?  @db.VarChar(80)
+  description    String   @db.Text
+  hsnSac         String?  @map("hsn_sac") @db.VarChar(20)
+  quantity       Decimal  @db.Decimal(18, 4)
+  unitCode       String?  @map("unit_code") @db.VarChar(20)
+  rate           Decimal  @db.Decimal(18, 4)
+  discountAmount Decimal  @default(0) @map("discount_amount") @db.Decimal(18, 4)
+  taxableAmount  Decimal  @default(0) @map("taxable_amount") @db.Decimal(18, 4)
+  gstRate        Decimal  @default(0) @map("gst_rate") @db.Decimal(7, 4)
+  igstAmount     Decimal  @default(0) @map("igst_amount") @db.Decimal(18, 4)
+  cgstAmount     Decimal  @default(0) @map("cgst_amount") @db.Decimal(18, 4)
+  sgstAmount     Decimal  @default(0) @map("sgst_amount") @db.Decimal(18, 4)
+  lineTotal      Decimal  @default(0) @map("line_total") @db.Decimal(18, 4)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  item         Item?        @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  creditNoteLines CreditNoteLine[]
+
+  @@index([organisationId, invoiceId, sortOrder])
+  @@map("invoice_items")
+}
+
+model InvoiceRevision {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  invoiceId      String   @map("invoice_id") @db.Char(36)
+  revisionNumber Int      @map("revision_number")
+  reason         String   @db.Text
+  snapshot       Json
+  createdById    String   @map("created_by_id") @db.Char(36)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  createdBy    User         @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, revisionNumber])
+  @@index([organisationId, invoiceId])
+  @@map("invoice_revisions")
+}
+
+model CreditNote {
+  id                    String           @id @default(uuid()) @db.Char(36)
+  organisationId        String           @map("organisation_id") @db.Char(36)
+  originalInvoiceId     String           @map("original_invoice_id") @db.Char(36)
+  status                CreditNoteStatus @default(draft)
+  seriesId              String?          @map("series_id") @db.Char(36)
+  creditNoteNumber      String?          @map("credit_note_number") @db.VarChar(120)
+  sequenceNumber        Int?             @map("sequence_number")
+  creditNoteDate        DateTime         @map("credit_note_date") @db.Date
+  financialYear         String?          @map("financial_year") @db.VarChar(20)
+  reason                String?          @db.Text
+  currency              String           @default("INR") @db.Char(3)
+  subtotal              Decimal          @default(0) @db.Decimal(18, 4)
+  taxableTotal          Decimal          @default(0) @map("taxable_total") @db.Decimal(18, 4)
+  igstTotal             Decimal          @default(0) @map("igst_total") @db.Decimal(18, 4)
+  cgstTotal             Decimal          @default(0) @map("cgst_total") @db.Decimal(18, 4)
+  sgstTotal             Decimal          @default(0) @map("sgst_total") @db.Decimal(18, 4)
+  roundOff              Decimal          @default(0) @map("round_off") @db.Decimal(18, 4)
+  grandTotal            Decimal          @default(0) @map("grand_total") @db.Decimal(18, 4)
+  originalInvoiceSnapshot Json           @map("original_invoice_snapshot")
+  createdById           String           @map("created_by_id") @db.Char(36)
+  updatedById           String?          @map("updated_by_id") @db.Char(36)
+  issuedById            String?          @map("issued_by_id") @db.Char(36)
+  issuedAt              DateTime?        @map("issued_at")
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
+
+  organisation    Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  originalInvoice Invoice      @relation("OriginalInvoiceCreditNotes", fields: [originalInvoiceId], references: [id], onDelete: Restrict)
+  series          CreditNoteNumberSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  createdBy       User         @relation("CreditNoteCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy       User?        @relation("CreditNoteUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  issuedBy        User?        @relation("CreditNoteIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
+  lines           CreditNoteLine[]
+  documents       GeneratedDocument[] @relation("CreditNoteDocuments")
+
+  @@index([organisationId, status, creditNoteDate])
+  @@index([organisationId, originalInvoiceId])
+  @@index([organisationId, creditNoteNumber])
+  @@map("credit_notes")
+}
+
+model CreditNoteLine {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  creditNoteId   String   @map("credit_note_id") @db.Char(36)
+  invoiceItemId  String?  @map("invoice_item_id") @db.Char(36)
+  sortOrder      Int      @map("sort_order")
+  sku            String?  @db.VarChar(80)
+  description    String   @db.Text
+  hsnSac         String?  @map("hsn_sac") @db.VarChar(20)
+  quantity       Decimal  @db.Decimal(18, 4)
+  unitCode       String?  @map("unit_code") @db.VarChar(20)
+  rate           Decimal  @db.Decimal(18, 4)
+  discountAmount Decimal  @default(0) @map("discount_amount") @db.Decimal(18, 4)
+  taxableAmount  Decimal  @default(0) @map("taxable_amount") @db.Decimal(18, 4)
+  gstRate        Decimal  @default(0) @map("gst_rate") @db.Decimal(7, 4)
+  igstAmount     Decimal  @default(0) @map("igst_amount") @db.Decimal(18, 4)
+  cgstAmount     Decimal  @default(0) @map("cgst_amount") @db.Decimal(18, 4)
+  sgstAmount     Decimal  @default(0) @map("sgst_amount") @db.Decimal(18, 4)
+  lineTotal      Decimal  @default(0) @map("line_total") @db.Decimal(18, 4)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  creditNote   CreditNote   @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  invoiceItem  InvoiceItem? @relation(fields: [invoiceItemId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, creditNoteId, sortOrder])
+  @@index([organisationId, invoiceItemId])
+  @@map("credit_note_lines")
+}
+
+model GeneratedDocument {
+  id              String   @id @default(uuid()) @db.Char(36)
+  organisationId  String   @map("organisation_id") @db.Char(36)
+  invoiceId       String   @map("invoice_id") @db.Char(36)
+  creditNoteId    String?  @map("credit_note_id") @db.Char(36)
+  documentType    String   @map("document_type") @db.VarChar(40)
+  templateVersion String   @map("template_version") @db.VarChar(40)
+  storageKey      String?  @map("storage_key") @db.VarChar(255)
+  checksumSha256  String?  @map("checksum_sha256") @db.Char(64)
+  generatedAt     DateTime @default(now()) @map("generated_at")
+  generatedById   String   @map("generated_by_id") @db.Char(36)
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  creditNote   CreditNote?  @relation("CreditNoteDocuments", fields: [creditNoteId], references: [id], onDelete: Restrict)
+  generatedBy  User         @relation(fields: [generatedById], references: [id], onDelete: Restrict)
+
+  @@index([organisationId, invoiceId])
+  @@index([organisationId, creditNoteId])
+  @@map("generated_documents")
+}
+
+model Payment {
+  id                String        @id @default(uuid()) @db.Char(36)
+  organisationId    String        @map("organisation_id") @db.Char(36)
+  paymentDate       DateTime      @map("payment_date") @db.Date
+  amount            Decimal       @db.Decimal(18, 4)
+  currency          String        @default("INR") @db.Char(3)
+  paymentMethod     String        @map("payment_method") @db.VarChar(80)
+  referenceNumber   String?       @map("reference_number") @db.VarChar(160)
+  bankAccountId     String?       @map("bank_account_id") @db.Char(36)
+  notes             String?       @db.Text
+  status            PaymentStatus @default(posted)
+  idempotencyKey    String?       @map("idempotency_key") @db.VarChar(120)
+  createdById       String        @map("created_by_id") @db.Char(36)
+  createdAt         DateTime      @default(now()) @map("created_at")
+  reversedById      String?       @map("reversed_by_id") @db.Char(36)
+  reversedAt        DateTime?     @map("reversed_at")
+  reversalReason    String?       @map("reversal_reason") @db.Text
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  bankAccount  CompanyBankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  createdBy    User @relation("PaymentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  reversedBy   User? @relation("PaymentReverser", fields: [reversedById], references: [id], onDelete: SetNull)
+  allocations  PaymentAllocation[]
+
+  @@unique([organisationId, idempotencyKey])
+  @@index([organisationId, paymentDate])
+  @@index([organisationId, status])
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id             String   @id @default(uuid()) @db.Char(36)
+  organisationId String   @map("organisation_id") @db.Char(36)
+  paymentId      String   @map("payment_id") @db.Char(36)
+  invoiceId      String   @map("invoice_id") @db.Char(36)
+  amount         Decimal  @db.Decimal(18, 4)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  payment      Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, invoiceId])
+  @@index([organisationId, invoiceId])
+  @@index([organisationId, paymentId])
+  @@map("payment_allocations")
+}
+
+enum TaxType {
+  gst
+  export_zero_rated
+  no_tax
+}
+
+enum TaxMode {
+  automatic
+  igst
+  cgst_sgst
+  zero_rated_export
+  no_tax
+}
+
+enum RoundingPolicy {
+  none
+  nearest_rupee
+  two_decimals
+}
+
+enum SeriesResetRule {
+  never
+  calendar_year
+  financial_year
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  partially_paid
+  paid
+  cancelled
+  amended
+}
+
+enum PaymentStatus {
+  posted
+  reversed
+}
+
+enum CreditNoteStatus {
+  draft
+  issued
+  cancelled
+}
+
+enum MemberRole {
+  owner
+  admin
+  accountant
+  viewer
+}
+
+enum MemberStatus {
+  active
+  invited
+  suspended
+}

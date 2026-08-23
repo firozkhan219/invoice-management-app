@@ -1,0 +1,260 @@
+import { redirect } from "next/navigation";
+import { AppShell } from "@/components/app-shell";
+import { getCurrentUser } from "@/lib/auth/session";
+import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { listCompanies } from "@/lib/companies/company-service";
+
+export default async function CompaniesPage() {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  const context = await getTenantContextForUser(user.id);
+
+  if (!context) {
+    redirect("/register");
+  }
+
+  const companies = await listCompanies(context);
+
+  return (
+    <AppShell>
+      <header className="page-header">
+        <div>
+          <p className="muted">Master data</p>
+          <h1>Companies</h1>
+        </div>
+      </header>
+      <div className="grid two-column">
+        <section className="panel">
+          <div className="section-title">
+            <div>
+              <p className="muted">Legal entities</p>
+              <h2>{companies.length} companies</h2>
+            </div>
+          </div>
+          {companies.length === 0 ? (
+            <div className="empty-state">No companies yet. Add your first legal entity.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Company</th>
+                    <th>Tax IDs</th>
+                    <th>Address</th>
+                    <th>Bank accounts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {companies.map((company) => (
+                    <tr key={company.id}>
+                      <td>
+                        <strong>{company.legalName}</strong>
+                        {company.isDefault ? <span className="badge">Default</span> : null}
+                        <p className="muted">{company.tradingName || "-"}</p>
+                      </td>
+                      <td>
+                        <div>GSTIN: {company.gstin || "-"}</div>
+                        <div>PAN: {company.pan || "-"}</div>
+                        <div>IEC: {company.iec || "-"}</div>
+                      </td>
+                      <td>
+                        {company.addressLine1}
+                        {company.addressLine2 ? `, ${company.addressLine2}` : ""}
+                        <br />
+                        {company.city}, {company.state} {company.postcode}
+                      </td>
+                      <td>
+                        {company.bankAccounts.length === 0 ? (
+                          <span className="muted">No bank account</span>
+                        ) : (
+                          company.bankAccounts.map((account) => (
+                            <div key={account.id}>
+                              <strong>{account.bankName}</strong>
+                              {account.isDefault ? <span className="badge">Default</span> : null}
+                              <br />
+                              <span className="muted">{account.maskedAccountNumber}</span>
+                            </div>
+                          ))
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <aside className="grid">
+          <section className="panel">
+            <div className="section-title">
+              <div>
+                <p className="muted">Legal profile</p>
+                <h2>Add company</h2>
+              </div>
+            </div>
+            <form className="form" action="/api/companies" method="post">
+              <div className="field">
+                <label htmlFor="legalName">Legal name</label>
+                <input id="legalName" name="legalName" required />
+              </div>
+              <div className="field">
+                <label htmlFor="tradingName">Trading name</label>
+                <input id="tradingName" name="tradingName" />
+              </div>
+              <div className="field">
+                <label htmlFor="addressLine1">Address line 1</label>
+                <input id="addressLine1" name="addressLine1" required />
+              </div>
+              <div className="field">
+                <label htmlFor="addressLine2">Address line 2</label>
+                <input id="addressLine2" name="addressLine2" />
+              </div>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="city">City</label>
+                  <input id="city" name="city" required />
+                </div>
+                <div className="field">
+                  <label htmlFor="state">State</label>
+                  <input id="state" name="state" placeholder="Uttar Pradesh" required />
+                </div>
+              </div>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="stateCode">State code</label>
+                  <input id="stateCode" name="stateCode" maxLength={10} placeholder="09" />
+                </div>
+                <div className="field">
+                  <label htmlFor="postcode">Postcode</label>
+                  <input id="postcode" name="postcode" required />
+                </div>
+              </div>
+              <div className="field">
+                <label htmlFor="country">Country</label>
+                <input id="country" name="country" defaultValue="India" required />
+              </div>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="phone">Phone</label>
+                  <input id="phone" name="phone" />
+                </div>
+                <div className="field">
+                  <label htmlFor="email">Email</label>
+                  <input id="email" name="email" type="email" />
+                </div>
+              </div>
+              <div className="form-grid three">
+                <div className="field">
+                  <label htmlFor="gstin">GSTIN</label>
+                  <input id="gstin" name="gstin" maxLength={15} />
+                </div>
+                <div className="field">
+                  <label htmlFor="pan">PAN</label>
+                  <input id="pan" name="pan" maxLength={10} />
+                </div>
+                <div className="field">
+                  <label htmlFor="iec">IEC</label>
+                  <input id="iec" name="iec" maxLength={20} />
+                </div>
+              </div>
+              <div className="field">
+                <label htmlFor="signatoryName">Signatory name</label>
+                <input id="signatoryName" name="signatoryName" />
+              </div>
+              <div className="field">
+                <label htmlFor="signatoryDesignation">Signatory designation</label>
+                <input id="signatoryDesignation" name="signatoryDesignation" />
+              </div>
+              <div className="field">
+                <label htmlFor="defaultDeclaration">Default declaration</label>
+                <textarea id="defaultDeclaration" name="defaultDeclaration" />
+              </div>
+              <div className="field">
+                <label htmlFor="defaultTerms">Default terms</label>
+                <textarea id="defaultTerms" name="defaultTerms" />
+              </div>
+              <label className="checkbox">
+                <input type="checkbox" name="isDefault" value="true" />
+                Default company
+              </label>
+              <button className="button" type="submit">
+                Save company
+              </button>
+            </form>
+          </section>
+
+          <section className="panel">
+            <div className="section-title">
+              <div>
+                <p className="muted">Payment details</p>
+                <h2>Add bank account</h2>
+              </div>
+            </div>
+            {companies.length === 0 ? (
+              <div className="empty-state">Create a company first.</div>
+            ) : (
+              <form className="form" action="/api/companies/bank-accounts" method="post">
+                <div className="field">
+                  <label htmlFor="companyId">Company</label>
+                  <select id="companyId" name="companyId" required>
+                    {companies.map((company) => (
+                      <option key={company.id} value={company.id}>
+                        {company.legalName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="bankName">Bank name</label>
+                  <input id="bankName" name="bankName" required />
+                </div>
+                <div className="field">
+                  <label htmlFor="accountHolderName">Account holder</label>
+                  <input id="accountHolderName" name="accountHolderName" required />
+                </div>
+                <div className="field">
+                  <label htmlFor="accountNumber">Account number</label>
+                  <input id="accountNumber" name="accountNumber" required />
+                </div>
+                <div className="form-grid">
+                  <div className="field">
+                    <label htmlFor="ifsc">IFSC</label>
+                    <input id="ifsc" name="ifsc" />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="swiftBic">SWIFT/BIC</label>
+                    <input id="swiftBic" name="swiftBic" />
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="branchName">Branch name</label>
+                  <input id="branchName" name="branchName" />
+                </div>
+                <div className="field">
+                  <label htmlFor="branchAddress">Branch address</label>
+                  <textarea id="branchAddress" name="branchAddress" />
+                </div>
+                <div className="field">
+                  <label htmlFor="currency">Currency</label>
+                  <input id="currency" name="currency" defaultValue="INR" required />
+                </div>
+                <label className="checkbox">
+                  <input type="checkbox" name="isDefault" value="true" />
+                  Default bank account
+                </label>
+                <button className="button" type="submit">
+                  Save bank account
+                </button>
+              </form>
+            )}
+          </section>
+        </aside>
+      </div>
+    </AppShell>
+  );
+}
