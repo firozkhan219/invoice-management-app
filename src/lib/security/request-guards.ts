@@ -42,13 +42,25 @@ export function isUnsafeMethod(method: string): boolean {
   return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
 }
 
-export function isSameOriginRequest(requestUrl: string, origin: string | null, fetchSite: string | null): boolean {
+export function isSameOriginRequest(
+  requestUrl: string,
+  origin: string | null,
+  fetchSite: string | null,
+  allowedOrigins: string[] = []
+): boolean {
   if (fetchSite === "cross-site") return false;
   if (!origin) return true;
   try {
     const originUrl = new URL(origin);
     const targetUrl = new URL(requestUrl);
     if (originUrl.origin === targetUrl.origin) return true;
+    if (allowedOrigins.some((allowedOrigin) => {
+      try {
+        return new URL(allowedOrigin).origin === originUrl.origin;
+      } catch {
+        return false;
+      }
+    })) return true;
 
     const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
     return localHosts.has(originUrl.hostname)

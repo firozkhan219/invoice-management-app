@@ -2,6 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { clientIpFromHeaders, isSameOriginRequest, isUnsafeMethod, MemoryRateLimiter } from "@/lib/security/request-guards";
 
 const limiter = new MemoryRateLimiter();
+const allowedOrigins = [
+  process.env.NEXT_PUBLIC_APP_URL,
+  process.env.ALLOWED_ORIGIN
+].filter((origin): origin is string => Boolean(origin));
 
 const rules = [
   { prefix: "/api/auth/login", limit: 10, windowMs: 60_000 },
@@ -16,7 +20,8 @@ export function proxy(request: NextRequest) {
     if (isUnsafeMethod(request.method) && !isSameOriginRequest(
       request.url,
       request.headers.get("origin"),
-      request.headers.get("sec-fetch-site")
+      request.headers.get("sec-fetch-site"),
+      allowedOrigins
     )) {
       return Response.json({ ok: false, error: "Cross-origin requests are not allowed." }, { status: 403 });
     }

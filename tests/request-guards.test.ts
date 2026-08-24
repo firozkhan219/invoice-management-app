@@ -21,6 +21,15 @@ describe("request guards", () => {
     expect(isSameOriginRequest("http://127.0.0.1:3000/api/auth/login", "http://localhost:3001", "same-site")).toBe(false);
   });
 
+  it("allows configured public origin behind a hosting proxy", () => {
+    expect(isSameOriginRequest(
+      "https://s15175.bom1.stableserver.net:2083/proxied/api/auth/register",
+      "https://app.decorativehandicraft.com",
+      "same-site",
+      ["https://app.decorativehandicraft.com"]
+    )).toBe(true);
+  });
+
   it("rate limits within a fixed window", () => {
     const limiter = new MemoryRateLimiter();
     expect(limiter.check("login:1", 2, 60_000, 1000).ok).toBe(true);
