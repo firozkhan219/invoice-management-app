@@ -15,7 +15,7 @@ export default async function DashboardPage() {
   const membership = user.memberships[0];
 
   if (!membership) {
-    redirect("/register");
+    redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
   }
   const summary = await getDashboardSummary({
     userId: user.id,

@@ -1,24 +1,21 @@
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/session";
-import { createInvoiceDraft, updateInvoiceDraft } from "@/lib/invoices/invoice-service";
-import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { blankKeys, handleTenantForm, idPath, parseForm } from "@/lib/http/form";
+import { CLEARABLE_DRAFT_FIELDS, createInvoiceDraft, updateInvoiceDraft } from "@/lib/invoices/invoice-service";
 import { invoiceDraftSchema } from "@/lib/validation/invoices";
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ ok: false, error: "Unauthenticated" }, { status: 401 });
-  const context = await getTenantContextForUser(user.id);
-  if (!context) return Response.json({ ok: false, error: "No active organisation." }, { status: 403 });
+  return handleTenantForm(request, {
+    errorPath: (fields) => idPath("/invoices", fields.invoiceId, "/invoices/new"),
+    handler: async ({ context, fields }) => {
+      const invoiceId = typeof fields.invoiceId === "string" && fields.invoiceId ? fields.invoiceId : undefined;
+      const { invoiceId: _ignored, ...draftFields } = fields;
+      void _ignored;
+      const input = parseForm(invoiceDraftSchema, draftFields);
 
-  const data = Object.fromEntries(await request.formData());
-  const invoiceId = typeof data.invoiceId === "string" ? data.invoiceId : undefined;
-  delete data.invoiceId;
-  const parsed = invoiceDraftSchema.safeParse(data);
-  if (!parsed.success) return Response.json({ ok: false, errors: parsed.error.flatten().fieldErrors }, { status: 400 });
+      const invoice = invoiceId
+        ? await updateInvoiceDraft(context, invoiceId, input, blankKeys(draftFields, CLEARABLE_DRAFT_FIELDS))
+        : await createInvoiceDraft(context, input);
 
-  const invoice = invoiceId
-    ? await updateInvoiceDraft(context, invoiceId, parsed.data)
-    : await createInvoiceDraft(context, parsed.data);
-
-  redirect(`/invoices/${invoice.id}`);
+      return `/invoices/${invoice.id}`;
+    }
+  });
 }

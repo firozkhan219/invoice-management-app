@@ -80,3 +80,9 @@ export async function getCurrentUser() {
 
   return session.user;
 }
+
+export async function currentSessionTokenHash(): Promise<string | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  return token ? hashToken(token) : null;
+}

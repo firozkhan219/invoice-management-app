@@ -56,6 +56,10 @@ export type InvoicePdfData = {
   };
   notes?: string | null;
   declaration?: string | null;
+  /** PNG/JPEG bytes of the company logo, drawn top-left when present. */
+  logo?: Buffer | null;
+  /** PNG/JPEG bytes of the authorised signature, drawn in the signature cell when present. */
+  signature?: Buffer | null;
 };
 
 const page = { margin: 28, right: 567, bottom: 812 };
@@ -84,6 +88,7 @@ export function invoicePdfFilename(invoiceNumber: string): string {
 
 function drawInvoice(doc: PDFKit.PDFDocument, data: InvoicePdfData) {
   doc.lineWidth(0.6).strokeColor("#111111").fillColor("#111111");
+  drawImage(doc, data.logo, page.margin, 20, 120, 30);
   doc.font("Helvetica-Bold").fontSize(14).text(data.documentTitle || "Tax Invoice", page.margin, 30, { width: tableWidth, align: "center" });
 
   let y = drawHeaderGrid(doc, data, 54);
@@ -169,7 +174,8 @@ function drawItemsTable(doc: PDFKit.PDFDocument, lines: InvoicePdfLine[], startY
       { value: formatQty(item.quantity), width: widths.quantity, align: "right" as const },
       { value: item.unitCode || "", width: widths.unit, align: "center" as const },
       { value: money(item.rate), width: widths.rate, align: "right" as const },
-      { value: money(item.lineTotal), width: widths.amount, align: "right" as const }
+      // Amount = taxable value of the line (qty x rate - line discount); taxes are added in the totals box.
+      { value: money(item.taxableAmount), width: widths.amount, align: "right" as const }
     ];
 
     let x = tableX;
@@ -241,16 +247,25 @@ function drawBankDeclarationSignature(doc: PDFKit.PDFDocument, data: InvoicePdfD
   drawCell(doc, tableX, y, leftW, 72, "Bank Details", [
     text(data.bank, "bankName") ? `Bank Name - ${text(data.bank, "bankName")}` : "",
     text(data.bank, "accountHolderName") ? `Company Name - ${text(data.bank, "accountHolderName")}` : "",
-    text(data.bank, "accountNumberLast4") ? `Account Number - xxxxxx${text(data.bank, "accountNumberLast4")}` : "",
+    text(data.bank, "accountNumber")
+      ? `Account Number - ${text(data.bank, "accountNumber")}`
+      : text(data.bank, "accountNumberLast4") ? `Account Number - xxxxxx${text(data.bank, "accountNumberLast4")}` : "",
     [text(data.bank, "ifsc") ? `IFSC - ${text(data.bank, "ifsc")}` : "", text(data.bank, "swiftBic") ? `Swift Code - ${text(data.bank, "swiftBic")}` : ""].filter(Boolean).join(", "),
     text(data.bank, "branchName") ? `Branch - ${text(data.bank, "branchName")}` : ""
   ]);
-  drawCell(doc, tableX + leftW, y, rightW, 72, "Signature & Date", [
-    `For, ${text(data.company, "legalName", "Company")}`,
-    "",
+  const signatoryLines = [
     text(data.company, "signatoryName"),
     text(data.company, "signatoryDesignation", "Authorised Signatory")
-  ]);
+  ];
+  if (data.signature) {
+    drawCellWithImage(doc, tableX + leftW, y, rightW, 72, `For, ${text(data.company, "legalName", "Company")}`, data.signature, signatoryLines);
+  } else {
+    drawCell(doc, tableX + leftW, y, rightW, 72, "Signature & Date", [
+      `For, ${text(data.company, "legalName", "Company")}`,
+      "",
+      ...signatoryLines
+    ]);
+  }
   drawCell(doc, tableX, y + 72, tableWidth, 54, "Declaration", [
     data.declaration || "We declare that this Invoice shows the actual prices of the goods described and that all particulars are true and correct."
   ]);
@@ -259,10 +274,14 @@ function drawBankDeclarationSignature(doc: PDFKit.PDFDocument, data: InvoicePdfD
 function visibleTotalRows(data: InvoicePdfData): Array<[string, string | number]> {
   const rows: Array<[string, string | number]> = [
     ["TOTAL Amount", data.totals.subtotal],
+    // The invoice discount reduces the taxable value, so it is shown before the taxes.
+    ["Less: Discount", data.totals.invoiceDiscount],
+    ...(Number(data.totals.invoiceDiscount || 0) !== 0
+      ? [["Taxable Value", data.totals.taxableTotal] as [string, string | number]]
+      : []),
     ["IGST", data.totals.igstTotal],
     ["CGST", data.totals.cgstTotal],
     ["SGST", data.totals.sgstTotal],
-    ["Discount", data.totals.invoiceDiscount],
     ["Other Charges", data.totals.otherCharges],
     ["Round Off", data.totals.roundOff],
     [data.currency === "INR" ? "Grand Total in Rs." : `Grand Total in ${data.currency}`, data.totals.grandTotal]
@@ -276,6 +295,39 @@ function drawCell(doc: PDFKit.PDFDocument, x: number, y: number, width: number, 
   doc.font("Helvetica").fontSize(7.5).text(rows.filter(Boolean).join("\n"), x + 4, y + 17, {
     width: width - 8,
     height: height - 20,
+    ellipsis: true
+  });
+}
+
+/** Draws an image fitted into a box; silently skips unreadable images. */
+function drawImage(doc: PDFKit.PDFDocument, image: Buffer | null | undefined, x: number, y: number, width: number, height: number): boolean {
+  if (!image) return false;
+  try {
+    doc.image(image, x, y, { fit: [width, height], valign: "center" });
+    return true;
+  } catch (error) {
+    console.error("Could not draw image in PDF", error);
+    return false;
+  }
+}
+
+function drawCellWithImage(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  heading: string,
+  image: Buffer,
+  footerLines: string[]
+) {
+  doc.rect(x, y, width, height).stroke();
+  doc.font("Helvetica-Bold").fontSize(7.5).text("Signature & Date", x + 4, y + 4, { width: width - 8 });
+  doc.font("Helvetica").fontSize(7.5).text(heading, x + 4, y + 14, { width: width - 8, height: 9, ellipsis: true });
+  drawImage(doc, image, x + 4, y + 24, width - 8, 26);
+  doc.font("Helvetica").fontSize(7.5).text(footerLines.filter(Boolean).join("\n"), x + 4, y + 51, {
+    width: width - 8,
+    height: height - 52,
     ellipsis: true
   });
 }
@@ -295,7 +347,12 @@ function addPageNumbers(doc: PDFKit.PDFDocument) {
   for (let i = range.start; i < range.start + range.count; i += 1) {
     doc.switchToPage(i);
     doc.font("Helvetica").fontSize(7).fillColor("#111111");
-    doc.text(`Page ${i + 1} of ${range.count}`, page.margin, 820, { width: tableWidth, align: "center" });
+    // The footer sits inside the bottom margin; drop the margin while writing it so
+    // PDFKit does not treat it as overflow and append an empty extra page.
+    const bottomMargin = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
+    doc.text(`Page ${i + 1} of ${range.count}`, page.margin, 820, { width: tableWidth, align: "center", lineBreak: false });
+    doc.page.margins.bottom = bottomMargin;
   }
 }
 

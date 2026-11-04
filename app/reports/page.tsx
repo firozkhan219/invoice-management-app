@@ -9,7 +9,7 @@ export default async function ReportsPage() {
   if (!user) redirect("/login");
 
   const context = await getTenantContextForUser(user.id);
-  if (!context) redirect("/register");
+  if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
 
   return (
     <AppShell>

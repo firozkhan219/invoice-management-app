@@ -24,3 +24,17 @@ export function assertPaymentWithinBalance(amount: Prisma.Decimal, balance: Pris
   if (amount.lte(ZERO)) throw new Error("Payment amount must be greater than zero.");
   if (amount.gt(balance)) throw new Error("Payment exceeds invoice balance.");
 }
+
+/** Balance and status once payments and issued credit notes are both counted against the total. */
+export function settlementState(
+  grandTotal: Prisma.Decimal,
+  paidTotal: Prisma.Decimal,
+  creditedTotal: Prisma.Decimal,
+  currentStatus: InvoiceStatus
+): { balanceDue: Prisma.Decimal; status: InvoiceStatus } {
+  const settled = paidTotal.add(creditedTotal);
+  return {
+    balanceDue: balanceDue(grandTotal, settled),
+    status: derivePaymentStatus(grandTotal, settled, currentStatus)
+  };
+}

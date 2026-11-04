@@ -41,3 +41,16 @@ export const itemSchema = z.object({
 export type UnitInput = z.infer<typeof unitSchema>;
 export type TaxRateInput = z.infer<typeof taxRateSchema>;
 export type ItemInput = z.infer<typeof itemSchema>;
+
+export const itemUpdateSchema = itemSchema.omit({ isActive: true }).extend({ itemId: z.string().uuid() });
+
+export const itemToggleSchema = z.object({
+  kind: z.enum(["item", "unit", "tax_rate"]),
+  id: z.string().uuid(),
+  active: z.enum(["true", "false"]).transform((value) => value === "true")
+});
+
+export const ITEM_CLEARABLE_FIELDS = ["sku", "description", "hsnSac", "unitId", "taxRateId", "saleRate"] as const;
+
+export type ItemUpdateInput = z.infer<typeof itemUpdateSchema>;
+export type ItemToggleInput = z.infer<typeof itemToggleSchema>;

@@ -1,11 +1,14 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { calculateInvoiceTotals } from "@/lib/invoices/calculation";
+import { calculateInvoiceTotals, type TaxModeInput } from "@/lib/invoices/calculation";
+import { bankRecordForDocument } from "@/lib/companies/bank-document";
+import { settlementState } from "@/lib/payments/payment-status";
+import { assertDateNotLocked } from "@/lib/settings/locked-periods";
 import type { InvoicePdfData } from "@/lib/invoices/invoice-pdf";
 import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
 import { financialYearLabel } from "@/lib/settings/financial-year";
-import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
+import { periodRangeForRule, planSequence, renderInvoiceNumber } from "@/lib/settings/number-series";
 import type {
   CreditNoteDraftInput,
   CreditNoteIssueInput,
@@ -161,6 +164,36 @@ export async function updateCreditNoteDraft(context: TenantContext, input: Credi
   return updated;
 }
 
+/**
+ * Tax treatment of the original issued invoice. "automatic" is resolved from the issued
+ * amounts: CGST/SGST were charged → intra-state, otherwise IGST.
+ */
+function creditTaxMode(invoice: { taxMode: TaxModeInput; cgstTotal: Prisma.Decimal; sgstTotal: Prisma.Decimal }): TaxModeInput {
+  if (invoice.taxMode !== "automatic") return invoice.taxMode;
+  return invoice.cgstTotal.gt(0) || invoice.sgstTotal.gt(0) ? "cgst_sgst" : "igst";
+}
+
+/** Quantity of an invoice line already credited on issued credit notes (optionally plus one draft). */
+async function creditedQuantity(
+  tx: Prisma.TransactionClient,
+  organisationId: string,
+  invoiceItemId: string,
+  includeDraftCreditNoteId?: string
+): Promise<Prisma.Decimal> {
+  const result = await tx.creditNoteLine.aggregate({
+    where: {
+      organisationId,
+      invoiceItemId,
+      OR: [
+        { creditNote: { status: "issued" } },
+        ...(includeDraftCreditNoteId ? [{ creditNoteId: includeDraftCreditNoteId }] : [])
+      ]
+    },
+    _sum: { quantity: true }
+  });
+  return result._sum.quantity ?? new Prisma.Decimal(0);
+}
+
 export async function addCreditNoteLine(context: TenantContext, input: CreditNoteLineInput) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:create");
@@ -176,8 +209,22 @@ export async function addCreditNoteLine(context: TenantContext, input: CreditNot
     const sourceLine = creditNote.originalInvoice.items.find((line) => line.id === input.invoiceItemId);
     if (!sourceLine) throw new Error("Original invoice line not found.");
 
-    const sortOrder = creditNote.lines.length + 1;
-    const lineTotals = calculateInvoiceTotals([{ ...input, gstRate: sourceLine.gstRate }], creditNote.originalInvoice.taxMode).lines[0];
+    const quantity = new Prisma.Decimal(input.quantity);
+    const rate = new Prisma.Decimal(input.rate);
+    if (rate.gt(sourceLine.rate)) {
+      throw new Error(`Credit rate cannot be higher than the invoiced rate (${sourceLine.rate.toString()}).`);
+    }
+    const alreadyCredited = await creditedQuantity(tx, tenant.organisationId, sourceLine.id, creditNote.id);
+    if (alreadyCredited.add(quantity).gt(sourceLine.quantity)) {
+      const remaining = Prisma.Decimal.max(sourceLine.quantity.sub(alreadyCredited), 0);
+      throw new Error(`Only ${remaining.toString()} of "${sourceLine.description}" can still be credited.`);
+    }
+
+    const sortOrder = creditNote.lines.reduce((max, line) => Math.max(max, line.sortOrder), 0) + 1;
+    const lineTotals = calculateInvoiceTotals(
+      [{ ...input, gstRate: sourceLine.gstRate }],
+      creditTaxMode(creditNote.originalInvoice)
+    ).lines[0];
     await tx.creditNoteLine.create({
       data: {
         organisationId: tenant.organisationId,
@@ -187,9 +234,9 @@ export async function addCreditNoteLine(context: TenantContext, input: CreditNot
         sku: sourceLine.sku,
         description: sourceLine.description,
         hsnSac: sourceLine.hsnSac,
-        quantity: new Prisma.Decimal(input.quantity),
+        quantity,
         unitCode: sourceLine.unitCode,
-        rate: new Prisma.Decimal(input.rate),
+        rate,
         discountAmount: new Prisma.Decimal(input.discountAmount),
         taxableAmount: lineTotals.taxableAmount,
         gstRate: sourceLine.gstRate,
@@ -254,17 +301,47 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
 
   return prisma.$transaction(
     async (tx) => {
-      const creditNote = await tx.creditNote.findFirst({
+      const draft = await tx.creditNote.findFirst({
         where: { id: input.creditNoteId, organisationId: tenant.organisationId },
-        include: { originalInvoice: true, lines: true }
+        select: { originalInvoiceId: true }
       });
-      if (!creditNote) throw new Error("Credit note not found.");
+      if (!draft) throw new Error("Credit note not found.");
+      // Lock the original invoice so credits and payments against it are applied one at a time.
+      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${draft.originalInvoiceId} FOR UPDATE`;
+
+      const creditNote = await tx.creditNote.findFirstOrThrow({
+        where: { id: input.creditNoteId, organisationId: tenant.organisationId },
+        include: { originalInvoice: { include: { items: true } }, lines: true }
+      });
+      const invoice = creditNote.originalInvoice;
       if (creditNote.status !== "draft") throw new Error("Only draft credit notes can be issued.");
-      if (!canCreateCreditNoteForInvoice(creditNote.originalInvoice.status)) {
+      if (!canCreateCreditNoteForInvoice(invoice.status)) {
         throw new Error("Credit notes can only be issued for issued, partially paid, or paid invoices.");
       }
       if (creditNote.lines.length === 0 || creditNote.grandTotal.lte(0)) {
         throw new Error("Add at least one positive credit line before issuing.");
+      }
+      if (creditNote.creditNoteDate < invoice.invoiceDate) {
+        throw new Error("Credit note date cannot be before the original invoice date.");
+      }
+      await assertDateNotLocked(tx, tenant.organisationId, creditNote.creditNoteDate, "issue this credit note");
+
+      for (const line of creditNote.lines) {
+        const source = invoice.items.find((item) => item.id === line.invoiceItemId);
+        if (!source) throw new Error("A credited invoice line no longer exists.");
+        const issuedQty = await creditedQuantity(tx, tenant.organisationId, source.id);
+        const thisNoteQty = creditNote.lines
+          .filter((other) => other.invoiceItemId === source.id)
+          .reduce((sum, other) => sum.add(other.quantity), new Prisma.Decimal(0));
+        if (issuedQty.add(thisNoteQty).gt(source.quantity)) {
+          throw new Error(`"${source.description}" would be credited more than the invoiced quantity.`);
+        }
+      }
+
+      const creditedTotal = invoice.creditedTotal.add(creditNote.grandTotal);
+      if (creditedTotal.gt(invoice.grandTotal)) {
+        const remaining = Prisma.Decimal.max(invoice.grandTotal.sub(invoice.creditedTotal), 0);
+        throw new Error(`Credit exceeds the invoice. At most ${invoice.currency} ${remaining.toString()} can still be credited.`);
       }
 
       const organisation = await tx.organisation.findUniqueOrThrow({ where: { id: tenant.organisationId } });
@@ -273,16 +350,25 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
       });
       if (!series) throw new Error("Credit note number series not found.");
 
-      const resetKey = resetKeyForRule(series.resetRule, creditNote.creditNoteDate, organisation.financialYearStart);
-      const shouldReset = resetKey !== null && series.lastResetKey !== resetKey;
-      let sequenceNumber = shouldReset ? series.startingNumber : series.nextSequence;
-      let creditNoteNumber = renderInvoiceNumber({
+      const range = periodRangeForRule(series.resetRule, creditNote.creditNoteDate, organisation.financialYearStart);
+      const used = await tx.creditNote.aggregate({
+        where: {
+          seriesId: series.id,
+          sequenceNumber: { not: null },
+          ...(range ? { creditNoteDate: { gte: range.start, lt: range.end } } : {})
+        },
+        _max: { sequenceNumber: true }
+      });
+      const plan = planSequence(series, creditNote.creditNoteDate, organisation.financialYearStart, used._max.sequenceNumber ?? null);
+      let sequenceNumber = plan.sequence;
+      const render = (sequence: number) => renderInvoiceNumber({
         pattern: series.pattern,
         prefix: series.prefix,
-        sequence: sequenceNumber,
+        sequence,
         date: creditNote.creditNoteDate,
         financialYearStartMonth: organisation.financialYearStart
       });
+      let creditNoteNumber = render(sequenceNumber);
       let numberAvailable = false;
 
       for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -295,20 +381,16 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
           break;
         }
         sequenceNumber += 1;
-        creditNoteNumber = renderInvoiceNumber({
-          pattern: series.pattern,
-          prefix: series.prefix,
-          sequence: sequenceNumber,
-          date: creditNote.creditNoteDate,
-          financialYearStartMonth: organisation.financialYearStart
-        });
+        creditNoteNumber = render(sequenceNumber);
       }
       if (!numberAvailable) throw new Error("Could not allocate an unused credit note number.");
 
-      await tx.creditNoteNumberSeries.update({
-        where: { id: series.id },
-        data: { nextSequence: sequenceNumber + 1, lastResetKey: resetKey }
-      });
+      if (plan.advanceSeries) {
+        await tx.creditNoteNumberSeries.update({
+          where: { id: series.id },
+          data: { nextSequence: sequenceNumber + 1, lastResetKey: plan.resetKey }
+        });
+      }
 
       const issued = await tx.creditNote.update({
         where: { id: creditNote.id },
@@ -324,6 +406,18 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
         }
       });
 
+      const settlement = settlementState(invoice.grandTotal, invoice.paidTotal, creditedTotal, invoice.status);
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          creditedTotal,
+          balanceDue: settlement.balanceDue,
+          status: settlement.status,
+          updatedById: tenant.userId,
+          version: { increment: 1 }
+        }
+      });
+
       await tx.auditLog.create({
         data: {
           organisationId: tenant.organisationId,
@@ -331,7 +425,12 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
           action: "credit_note.issue",
           entityType: "credit_note",
           entityId: creditNote.id,
-          metadata: { creditNoteNumber, sequenceNumber, originalInvoiceId: creditNote.originalInvoiceId }
+          metadata: {
+            creditNoteNumber,
+            sequenceNumber,
+            originalInvoiceId: creditNote.originalInvoiceId,
+            creditedTotal: creditedTotal.toString()
+          }
         }
       });
 
@@ -343,7 +442,7 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
 
 export async function createCreditNoteNumberSeries(context: TenantContext, input: CreditNoteNumberSeriesInput) {
   const tenant = requireTenantContext(context);
-  assertPermission(tenant.role, "invoices:issue");
+  assertPermission(tenant.role, "organisation:update");
 
   return prisma.$transaction(async (tx) => {
     if (input.companyId) {
@@ -394,7 +493,9 @@ export async function generateCreditNotePdf(context: TenantContext, creditNoteId
     import("@/lib/documents/document-storage")
   ]);
   const pdfData = buildCreditNotePdfData(creditNote);
-  const buffer = await renderInvoicePdf(pdfData);
+  const { loadCompanyImages } = await import("@/lib/files/company-images");
+  const images = await loadCompanyImages(tenant.organisationId, pdfData.company);
+  const buffer = await renderInvoicePdf({ ...pdfData, ...images });
   const stored = await writePrivateDocument(
     creditNotePdfStorageKey(tenant.organisationId, creditNote.id),
     buffer
@@ -437,7 +538,7 @@ async function recalculateCreditNoteTotals(
     where: { id: creditNoteId, organisationId },
     include: { originalInvoice: true, lines: true }
   });
-  const totals = calculateInvoiceTotals(creditNote.lines, creditNote.originalInvoice.taxMode);
+  const totals = calculateInvoiceTotals(creditNote.lines, creditTaxMode(creditNote.originalInvoice));
 
   return tx.creditNote.update({
     where: { id: creditNote.id },
@@ -480,7 +581,7 @@ function buildCreditNotePdfData(creditNote: NonNullable<Awaited<ReturnType<typeo
     consignee: asRecord(asRecord(original.consigneeSnapshot)?.buyer) ?? asRecord(original.consigneeBuyer),
     billingAddress: asRecord(asRecord(original.consigneeSnapshot)?.billingAddress) ?? asRecord(original.billingAddress),
     shippingAddress: asRecord(asRecord(original.consigneeSnapshot)?.shippingAddress) ?? asRecord(original.shippingAddress),
-    bank: asRecord(original.bankSnapshot) ?? asRecord(original.bankAccount),
+    bank: bankRecordForDocument(asRecord(original.bankSnapshot) ?? asRecord(original.bankAccount)),
     lines: creditNote.lines.map((line) => ({
       sortOrder: line.sortOrder,
       description: line.description,

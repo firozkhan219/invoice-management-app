@@ -1,12 +1,14 @@
 import { Prisma, type InvoiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { calculateInvoiceTotals, type InvoiceCalculationLine, type TaxModeInput } from "@/lib/invoices/calculation";
+import { calculateInvoiceTotals, resolveTaxMode } from "@/lib/invoices/calculation";
 import { canDeleteDraftInvoiceStatus, draftIssueRequirements } from "@/lib/invoices/lifecycle";
 import type { InvoicePdfData, InvoicePdfLine } from "@/lib/invoices/invoice-pdf";
 import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
 import { financialYearLabel } from "@/lib/settings/financial-year";
-import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
+import { assertDateNotLocked } from "@/lib/settings/locked-periods";
+import { periodRangeForRule, planSequence, renderInvoiceNumber } from "@/lib/settings/number-series";
+import { bankRecordForDocument } from "@/lib/companies/bank-document";
 import type {
   CancelInvoiceInput,
   DeleteDraftInvoiceInput,
@@ -68,17 +70,25 @@ type InvoicePdfSource = InvoiceSnapshotSource & {
   declaration: string | null;
 };
 
+const INVOICE_STATUSES: InvoiceStatus[] = ["draft", "issued", "partially_paid", "paid", "cancelled", "amended"];
+
+function validDate(value?: string): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 export async function listInvoices(context: TenantContext, filters: InvoiceListFilters = {}) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:read");
   const where: Prisma.InvoiceWhereInput = {
     organisationId: tenant.organisationId,
-    ...(filters.status ? { status: filters.status as InvoiceStatus } : {}),
+    ...(filters.status && INVOICE_STATUSES.includes(filters.status as InvoiceStatus) ? { status: filters.status as InvoiceStatus } : {}),
     ...(filters.currency ? { currency: filters.currency.toUpperCase() } : {}),
-    ...(filters.dateFrom || filters.dateTo ? {
+    ...(validDate(filters.dateFrom) || validDate(filters.dateTo) ? {
       invoiceDate: {
-        ...(filters.dateFrom ? { gte: new Date(filters.dateFrom) } : {}),
-        ...(filters.dateTo ? { lte: new Date(filters.dateTo) } : {})
+        ...(validDate(filters.dateFrom) ? { gte: validDate(filters.dateFrom) } : {}),
+        ...(validDate(filters.dateTo) ? { lte: validDate(filters.dateTo) } : {})
       }
     } : {}),
     ...(filters.q ? {
@@ -174,30 +184,59 @@ export async function getInvoiceIssueOptions(context: TenantContext) {
   return { organisation, series };
 }
 
+export const CLEARABLE_DRAFT_FIELDS = [
+  "companyId",
+  "buyerId",
+  "consigneeBuyerId",
+  "billingAddressId",
+  "shippingAddressId",
+  "bankAccountId",
+  "dueDate",
+  "placeOfSupplyStateCode",
+  "buyerOrderNumber",
+  "buyerOrderDate",
+  "exporterReference",
+  "preCarriageBy",
+  "placeOfReceipt",
+  "vesselFlightNo",
+  "portOfLoading",
+  "portOfDischarge",
+  "finalDestination",
+  "termsOfDelivery",
+  "notes",
+  "declaration"
+] as const;
+
+type ClearableDraftField = typeof CLEARABLE_DRAFT_FIELDS[number];
+
+function draftData(input: InvoiceDraftInput, clear: readonly string[] = []) {
+  const fields: Record<string, unknown> = { ...input };
+  delete fields.version;
+  for (const key of clear) {
+    if ((CLEARABLE_DRAFT_FIELDS as readonly string[]).includes(key)) fields[key] = null;
+  }
+  return fields as Omit<InvoiceDraftInput, "version" | ClearableDraftField> & {
+    [K in ClearableDraftField]?: InvoiceDraftInput[K] | null;
+  };
+}
+
 export async function createInvoiceDraft(context: TenantContext, input: InvoiceDraftInput) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:create");
 
   return prisma.$transaction(async (tx) => {
     await validateReferences(tx, tenant.organisationId, input);
-    const totals = calculateInvoiceTotals([], input.taxMode, input.invoiceDiscount, input.otherCharges);
 
-    const invoice = await tx.invoice.create({
+    const created = await tx.invoice.create({
       data: {
-        ...input,
+        ...draftData(input),
         organisationId: tenant.organisationId,
         createdById: tenant.userId,
-        subtotal: totals.subtotal,
-        taxableTotal: totals.taxableTotal,
-        igstTotal: totals.igstTotal,
-        cgstTotal: totals.cgstTotal,
-        sgstTotal: totals.sgstTotal,
-        roundOff: totals.roundOff,
-        grandTotal: totals.grandTotal,
         paidTotal: new Prisma.Decimal(0),
         balanceDue: new Prisma.Decimal(0)
       }
     });
+    const invoice = await recalculateDraft(tx, created.id, tenant.userId, { bumpVersion: false });
 
     await tx.auditLog.create({
       data: {
@@ -216,52 +255,38 @@ export async function createInvoiceDraft(context: TenantContext, input: InvoiceD
 export async function updateInvoiceDraft(
   context: TenantContext,
   invoiceId: string,
-  input: InvoiceDraftInput
+  input: InvoiceDraftInput,
+  clear: readonly string[] = []
 ) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:create");
 
   return prisma.$transaction(async (tx) => {
     const current = await tx.invoice.findFirst({
-      where: { id: invoiceId, organisationId: tenant.organisationId },
-      include: { items: true }
+      where: { id: invoiceId, organisationId: tenant.organisationId }
     });
 
     if (!current) throw new Error("Invoice not found.");
     if (current.status !== "draft") throw new Error("Only draft invoices can be edited.");
     if (input.version && input.version !== current.version) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
 
-    await validateReferences(tx, tenant.organisationId, input);
-
-    const totals = calculateInvoiceTotals(
-      current.items.map((line) => ({
-        quantity: line.quantity,
-        rate: line.rate,
-        discountAmount: line.discountAmount,
-        gstRate: line.gstRate
-      })),
-      input.taxMode,
-      input.invoiceDiscount,
-      input.otherCharges
-    );
-
-    const invoice = await tx.invoice.update({
-      where: { id: current.id },
-      data: {
-        ...input,
-        updatedById: tenant.userId,
-        subtotal: totals.subtotal,
-        taxableTotal: totals.taxableTotal,
-        igstTotal: totals.igstTotal,
-        cgstTotal: totals.cgstTotal,
-        sgstTotal: totals.sgstTotal,
-        roundOff: totals.roundOff,
-        grandTotal: totals.grandTotal,
-        paidTotal: new Prisma.Decimal(0),
-        balanceDue: new Prisma.Decimal(0),
-        version: { increment: 1 }
-      }
+    const data = draftData(input, clear);
+    const merged = (key: "companyId" | "buyerId" | "consigneeBuyerId" | "billingAddressId" | "shippingAddressId" | "bankAccountId") =>
+      data[key] === null ? null : (data[key] ?? current[key]);
+    await validateReferences(tx, tenant.organisationId, {
+      companyId: merged("companyId"),
+      buyerId: merged("buyerId"),
+      consigneeBuyerId: merged("consigneeBuyerId"),
+      billingAddressId: merged("billingAddressId"),
+      shippingAddressId: merged("shippingAddressId"),
+      bankAccountId: merged("bankAccountId")
     });
+
+    await tx.invoice.update({
+      where: { id: current.id },
+      data: { ...data, updatedById: tenant.userId }
+    });
+    const invoice = await recalculateDraft(tx, current.id, tenant.userId);
 
     await tx.auditLog.create({
       data: {
@@ -311,76 +336,76 @@ export async function deleteDraftInvoice(context: TenantContext, input: DeleteDr
   });
 }
 
+/** Fills a line from the catalog item when fields were left blank, and checks required values. */
+async function resolveLineValues(
+  tx: Prisma.TransactionClient,
+  organisationId: string,
+  input: InvoiceItemInput
+) {
+  const master = input.itemId
+    ? await tx.item.findFirst({
+        where: { id: input.itemId, organisationId },
+        include: { unit: true, taxRate: true }
+      })
+    : null;
+  if (input.itemId && !master) throw new Error("Item not found.");
+
+  const description = input.description ?? master?.description ?? master?.name;
+  if (!description) throw new Error("Description is required for a manual line.");
+  const rate = input.rate ?? (master?.saleRate ? master.saleRate.toString() : undefined);
+  if (rate === undefined) throw new Error("Rate is required (the selected item has no sale rate).");
+  const gstRate = input.gstRate ?? (master?.taxRate ? master.taxRate.rate.toString() : 0);
+
+  return {
+    itemId: master?.id ?? null,
+    sku: input.sku ?? master?.sku ?? null,
+    description,
+    hsnSac: input.hsnSac ?? master?.hsnSac ?? null,
+    unitCode: input.unitCode ?? master?.unit?.code ?? null,
+    quantity: new Prisma.Decimal(input.quantity),
+    rate: new Prisma.Decimal(rate),
+    discountAmount: new Prisma.Decimal(input.discountAmount),
+    gstRate: new Prisma.Decimal(gstRate)
+  };
+}
+
+async function loadEditableDraft(
+  tx: Prisma.TransactionClient,
+  organisationId: string,
+  invoiceId: string,
+  expectedVersion: number,
+  verb: string
+) {
+  const invoice = await tx.invoice.findFirst({
+    where: { id: invoiceId, organisationId },
+    include: { items: true }
+  });
+
+  if (!invoice) throw new Error("Invoice not found.");
+  if (invoice.status !== "draft") throw new Error(`Only draft invoice lines can be ${verb}.`);
+  if (invoice.version !== expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
+  return invoice;
+}
+
 export async function addInvoiceItem(context: TenantContext, input: InvoiceItemInput) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:create");
 
   return prisma.$transaction(async (tx) => {
-    const invoice = await tx.invoice.findFirst({
-      where: { id: input.invoiceId, organisationId: tenant.organisationId },
-      include: { items: true }
-    });
-
-    if (!invoice) throw new Error("Invoice not found.");
-    if (invoice.status !== "draft") throw new Error("Only draft invoices can be edited.");
-    if (invoice.version !== input.expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
-
-    if (input.itemId) {
-      const item = await tx.item.findFirst({
-        where: { id: input.itemId, organisationId: tenant.organisationId }
-      });
-      if (!item) throw new Error("Item not found.");
-    }
-
-    const lineTotals = calculateInvoiceTotals([input], invoice.taxMode);
-    const line = lineTotals.lines[0];
+    const invoice = await loadEditableDraft(tx, tenant.organisationId, input.invoiceId, input.expectedVersion, "edited");
+    const values = await resolveLineValues(tx, tenant.organisationId, input);
+    const nextSortOrder = invoice.items.reduce((max, line) => Math.max(max, line.sortOrder), 0) + 1;
 
     await tx.invoiceItem.create({
       data: {
+        ...values,
         organisationId: tenant.organisationId,
         invoiceId: invoice.id,
-        itemId: input.itemId,
-        sortOrder: input.sortOrder,
-        sku: input.sku,
-        description: input.description,
-        hsnSac: input.hsnSac,
-        quantity: new Prisma.Decimal(input.quantity),
-        unitCode: input.unitCode,
-        rate: new Prisma.Decimal(input.rate),
-        discountAmount: new Prisma.Decimal(input.discountAmount),
-        taxableAmount: line.taxableAmount,
-        gstRate: new Prisma.Decimal(input.gstRate),
-        igstAmount: line.igstAmount,
-        cgstAmount: line.cgstAmount,
-        sgstAmount: line.sgstAmount,
-        lineTotal: line.lineTotal
+        sortOrder: nextSortOrder
       }
     });
 
-    const allLines = [...invoice.items, {
-      quantity: new Prisma.Decimal(input.quantity),
-      rate: new Prisma.Decimal(input.rate),
-      discountAmount: new Prisma.Decimal(input.discountAmount),
-      gstRate: new Prisma.Decimal(input.gstRate)
-    }];
-    const totals = calculateInvoiceTotals(allLines, invoice.taxMode, invoice.invoiceDiscount, invoice.otherCharges);
-
-    const updatedInvoice = await tx.invoice.update({
-      where: { id: invoice.id },
-      data: {
-        subtotal: totals.subtotal,
-        taxableTotal: totals.taxableTotal,
-        igstTotal: totals.igstTotal,
-        cgstTotal: totals.cgstTotal,
-        sgstTotal: totals.sgstTotal,
-        roundOff: totals.roundOff,
-        grandTotal: totals.grandTotal,
-        paidTotal: new Prisma.Decimal(0),
-        balanceDue: new Prisma.Decimal(0),
-        updatedById: tenant.userId,
-        version: { increment: 1 }
-      }
-    });
+    const updatedInvoice = await recalculateDraft(tx, invoice.id, tenant.userId);
 
     await tx.auditLog.create({
       data: {
@@ -401,59 +426,17 @@ export async function updateInvoiceItem(context: TenantContext, input: InvoiceIt
   assertPermission(tenant.role, "invoices:create");
 
   return prisma.$transaction(async (tx) => {
-    const invoice = await tx.invoice.findFirst({
-      where: { id: input.invoiceId, organisationId: tenant.organisationId },
-      include: { items: true }
-    });
-
-    if (!invoice) throw new Error("Invoice not found.");
-    if (invoice.status !== "draft") throw new Error("Only draft invoice lines can be edited.");
-    if (invoice.version !== input.expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
-
+    const invoice = await loadEditableDraft(tx, tenant.organisationId, input.invoiceId, input.expectedVersion, "edited");
     const currentLine = invoice.items.find((item) => item.id === input.lineItemId);
     if (!currentLine) throw new Error("Invoice line item not found.");
 
-    if (input.itemId) {
-      const item = await tx.item.findFirst({
-        where: { id: input.itemId, organisationId: tenant.organisationId }
-      });
-      if (!item) throw new Error("Item not found.");
-    }
-
-    const lineTotals = calculateInvoiceTotals([input], invoice.taxMode);
-    const line = lineTotals.lines[0];
-
+    const values = await resolveLineValues(tx, tenant.organisationId, input);
     await tx.invoiceItem.update({
       where: { id: currentLine.id },
-      data: {
-        itemId: input.itemId,
-        sortOrder: input.sortOrder,
-        sku: input.sku,
-        description: input.description,
-        hsnSac: input.hsnSac,
-        quantity: new Prisma.Decimal(input.quantity),
-        unitCode: input.unitCode,
-        rate: new Prisma.Decimal(input.rate),
-        discountAmount: new Prisma.Decimal(input.discountAmount),
-        taxableAmount: line.taxableAmount,
-        gstRate: new Prisma.Decimal(input.gstRate),
-        igstAmount: line.igstAmount,
-        cgstAmount: line.cgstAmount,
-        sgstAmount: line.sgstAmount,
-        lineTotal: line.lineTotal
-      }
+      data: { ...values, sortOrder: input.sortOrder ?? currentLine.sortOrder }
     });
 
-    const allLines = invoice.items.map((item) => item.id === currentLine.id
-      ? {
-          quantity: new Prisma.Decimal(input.quantity),
-          rate: new Prisma.Decimal(input.rate),
-          discountAmount: new Prisma.Decimal(input.discountAmount),
-          gstRate: new Prisma.Decimal(input.gstRate)
-        }
-      : item
-    );
-    const updatedInvoice = await updateInvoiceTotals(tx, invoice, allLines, tenant.userId);
+    const updatedInvoice = await recalculateDraft(tx, invoice.id, tenant.userId);
 
     await tx.auditLog.create({
       data: {
@@ -475,15 +458,7 @@ export async function deleteInvoiceItem(context: TenantContext, input: InvoiceIt
   assertPermission(tenant.role, "invoices:create");
 
   return prisma.$transaction(async (tx) => {
-    const invoice = await tx.invoice.findFirst({
-      where: { id: input.invoiceId, organisationId: tenant.organisationId },
-      include: { items: true }
-    });
-
-    if (!invoice) throw new Error("Invoice not found.");
-    if (invoice.status !== "draft") throw new Error("Only draft invoice lines can be deleted.");
-    if (invoice.version !== input.expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
-
+    const invoice = await loadEditableDraft(tx, tenant.organisationId, input.invoiceId, input.expectedVersion, "deleted");
     const currentLine = invoice.items.find((item) => item.id === input.lineItemId);
     if (!currentLine) throw new Error("Invoice line item not found.");
 
@@ -491,8 +466,7 @@ export async function deleteInvoiceItem(context: TenantContext, input: InvoiceIt
       where: { id: currentLine.id }
     });
 
-    const remainingLines = invoice.items.filter((item) => item.id !== currentLine.id);
-    const updatedInvoice = await updateInvoiceTotals(tx, invoice, remainingLines, tenant.userId);
+    const updatedInvoice = await recalculateDraft(tx, invoice.id, tenant.userId);
 
     await tx.auditLog.create({
       data: {
@@ -509,18 +483,52 @@ export async function deleteInvoiceItem(context: TenantContext, input: InvoiceIt
   });
 }
 
-async function updateInvoiceTotals(
+function placeOfSupplyFor(invoice: {
+  placeOfSupplyStateCode: string | null;
+  shippingAddress: { stateCode: string | null } | null;
+  billingAddress: { stateCode: string | null } | null;
+}): string | null {
+  return invoice.placeOfSupplyStateCode || invoice.shippingAddress?.stateCode || invoice.billingAddress?.stateCode || null;
+}
+
+/**
+ * Recomputes every line and the invoice totals from scratch with the effective tax mode
+ * (automatic → IGST or CGST+SGST from company state vs place of supply) and saves them.
+ */
+async function recalculateDraft(
   tx: Prisma.TransactionClient,
-  invoice: {
-    id: string;
-    taxMode: TaxModeInput;
-    invoiceDiscount: Prisma.Decimal;
-    otherCharges: Prisma.Decimal;
-  },
-  lines: InvoiceCalculationLine[],
-  userId: string
+  invoiceId: string,
+  userId: string,
+  options: { bumpVersion?: boolean } = {}
 ) {
-  const totals = calculateInvoiceTotals(lines, invoice.taxMode, invoice.invoiceDiscount, invoice.otherCharges);
+  const invoice = await tx.invoice.findUniqueOrThrow({
+    where: { id: invoiceId },
+    include: {
+      items: { orderBy: { sortOrder: "asc" } },
+      company: { select: { stateCode: true } },
+      shippingAddress: { select: { stateCode: true } },
+      billingAddress: { select: { stateCode: true } }
+    }
+  });
+  const effectiveMode = resolveTaxMode(invoice.taxMode, {
+    supplierStateCode: invoice.company?.stateCode,
+    placeOfSupplyStateCode: placeOfSupplyFor(invoice)
+  });
+  const totals = calculateInvoiceTotals(invoice.items, effectiveMode, invoice.invoiceDiscount, invoice.otherCharges);
+
+  for (const [index, line] of invoice.items.entries()) {
+    const calculated = totals.lines[index];
+    await tx.invoiceItem.update({
+      where: { id: line.id },
+      data: {
+        taxableAmount: calculated.taxableAmount,
+        igstAmount: calculated.igstAmount,
+        cgstAmount: calculated.cgstAmount,
+        sgstAmount: calculated.sgstAmount,
+        lineTotal: calculated.lineTotal
+      }
+    });
+  }
 
   return tx.invoice.update({
     where: { id: invoice.id },
@@ -535,15 +543,24 @@ async function updateInvoiceTotals(
       paidTotal: new Prisma.Decimal(0),
       balanceDue: new Prisma.Decimal(0),
       updatedById: userId,
-      version: { increment: 1 }
+      ...(options.bumpVersion === false ? {} : { version: { increment: 1 } })
     }
   });
 }
 
+type ReferenceInput = {
+  companyId?: string | null;
+  buyerId?: string | null;
+  consigneeBuyerId?: string | null;
+  billingAddressId?: string | null;
+  shippingAddressId?: string | null;
+  bankAccountId?: string | null;
+};
+
 async function validateReferences(
   tx: Prisma.TransactionClient,
   organisationId: string,
-  input: InvoiceDraftInput
+  input: ReferenceInput
 ) {
   if (input.companyId) {
     const exists = await tx.company.count({ where: { id: input.companyId, organisationId } });
@@ -558,16 +575,22 @@ async function validateReferences(
     if (!exists) throw new Error("Consignee not found.");
   }
   if (input.billingAddressId) {
-    const exists = await tx.buyerAddress.count({ where: { id: input.billingAddressId, organisationId } });
-    if (!exists) throw new Error("Billing address not found.");
+    const address = await tx.buyerAddress.findFirst({ where: { id: input.billingAddressId, organisationId }, select: { buyerId: true } });
+    if (!address) throw new Error("Billing address not found.");
+    if (input.buyerId && address.buyerId !== input.buyerId) throw new Error("Billing address must belong to the selected buyer.");
   }
   if (input.shippingAddressId) {
-    const exists = await tx.buyerAddress.count({ where: { id: input.shippingAddressId, organisationId } });
-    if (!exists) throw new Error("Shipping address not found.");
+    const address = await tx.buyerAddress.findFirst({ where: { id: input.shippingAddressId, organisationId }, select: { buyerId: true } });
+    if (!address) throw new Error("Shipping address not found.");
+    const allowedBuyers = [input.buyerId, input.consigneeBuyerId].filter(Boolean);
+    if (allowedBuyers.length > 0 && !allowedBuyers.includes(address.buyerId)) {
+      throw new Error("Shipping address must belong to the buyer or the consignee.");
+    }
   }
   if (input.bankAccountId) {
-    const exists = await tx.companyBankAccount.count({ where: { id: input.bankAccountId, organisationId } });
-    if (!exists) throw new Error("Bank account not found.");
+    const account = await tx.companyBankAccount.findFirst({ where: { id: input.bankAccountId, organisationId }, select: { companyId: true } });
+    if (!account) throw new Error("Bank account not found.");
+    if (input.companyId && account.companyId !== input.companyId) throw new Error("Bank account must belong to the selected company.");
   }
 }
 
@@ -577,8 +600,30 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
 
   return prisma.$transaction(
     async (tx) => {
-      const invoice = await tx.invoice.findFirst({
+      const draft = await tx.invoice.findFirst({
         where: { id: input.invoiceId, organisationId: tenant.organisationId },
+        include: { company: true, shippingAddress: true, billingAddress: true }
+      });
+
+      if (!draft) throw new Error("Invoice not found.");
+      if (draft.status !== "draft") throw new Error("Only draft invoices can be issued.");
+      if (draft.version !== input.expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
+      await assertDateNotLocked(tx, tenant.organisationId, draft.invoiceDate, "issue this invoice");
+
+      if (draft.taxMode === "automatic") {
+        if (!draft.company?.stateCode) {
+          throw new Error("Add a state code to the company so GST can be worked out automatically, or pick a tax mode.");
+        }
+        if (!placeOfSupplyFor(draft)) {
+          throw new Error("Set the place of supply (or a buyer address with a state code), or pick a tax mode.");
+        }
+      }
+
+      await validateReferences(tx, tenant.organisationId, draft);
+      await recalculateDraft(tx, draft.id, tenant.userId, { bumpVersion: false });
+
+      const invoice = await tx.invoice.findUniqueOrThrow({
+        where: { id: draft.id },
         include: {
           company: true,
           buyer: true,
@@ -589,10 +634,6 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
           items: { orderBy: { sortOrder: "asc" } }
         }
       });
-
-      if (!invoice) throw new Error("Invoice not found.");
-      if (invoice.status !== "draft") throw new Error("Only draft invoices can be issued.");
-      if (invoice.version !== input.expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
       const requirements = draftIssueRequirements({
         status: invoice.status,
         companyId: invoice.companyId,
@@ -610,25 +651,30 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
       });
       if (!series) throw new Error("Invoice number series not found.");
 
-      const resetKey = resetKeyForRule(series.resetRule, invoice.invoiceDate, organisation.financialYearStart);
-      const shouldReset = resetKey !== null && series.lastResetKey !== resetKey;
-      let sequenceNumber = shouldReset ? series.startingNumber : series.nextSequence;
-      let invoiceNumber = renderInvoiceNumber({
+      const range = periodRangeForRule(series.resetRule, invoice.invoiceDate, organisation.financialYearStart);
+      const used = await tx.invoice.aggregate({
+        where: {
+          seriesId: series.id,
+          sequenceNumber: { not: null },
+          ...(range ? { invoiceDate: { gte: range.start, lt: range.end } } : {})
+        },
+        _max: { sequenceNumber: true }
+      });
+      const plan = planSequence(series, invoice.invoiceDate, organisation.financialYearStart, used._max.sequenceNumber ?? null);
+      let sequenceNumber = plan.sequence;
+      const render = (sequence: number) => renderInvoiceNumber({
         pattern: series.pattern,
         prefix: series.prefix,
-        sequence: sequenceNumber,
+        sequence,
         date: invoice.invoiceDate,
         financialYearStartMonth: organisation.financialYearStart
       });
+      let invoiceNumber = render(sequenceNumber);
       let numberAvailable = false;
 
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const existingInvoice = await tx.invoice.findFirst({
-          where: {
-            organisationId: tenant.organisationId,
-            invoiceNumber,
-            NOT: { id: invoice.id }
-          },
+          where: { organisationId: tenant.organisationId, invoiceNumber, NOT: { id: invoice.id } },
           select: { id: true }
         });
         const voidedNumber = await tx.invoiceNumberVoid.findFirst({
@@ -641,25 +687,24 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
         }
 
         sequenceNumber += 1;
-        invoiceNumber = renderInvoiceNumber({
-          pattern: series.pattern,
-          prefix: series.prefix,
-          sequence: sequenceNumber,
-          date: invoice.invoiceDate,
-          financialYearStartMonth: organisation.financialYearStart
+        invoiceNumber = render(sequenceNumber);
+      }
+      if (!numberAvailable) {
+        throw new Error("Could not allocate an unused invoice number. Check that the series pattern includes the sequence and the year.");
+      }
+
+      if (plan.advanceSeries) {
+        await tx.invoiceNumberSeries.update({
+          where: { id: series.id },
+          data: { nextSequence: sequenceNumber + 1, lastResetKey: plan.resetKey }
         });
       }
-      if (!numberAvailable) throw new Error("Could not allocate an unused invoice number.");
 
-      await tx.invoiceNumberSeries.update({
-        where: { id: series.id },
-        data: {
-          nextSequence: sequenceNumber + 1,
-          lastResetKey: resetKey
-        }
+      const effectiveTaxMode = resolveTaxMode(invoice.taxMode, {
+        supplierStateCode: invoice.company?.stateCode,
+        placeOfSupplyStateCode: placeOfSupplyFor(invoice)
       });
-
-      const snapshot = buildInvoiceSnapshot(invoice);
+      const snapshot = buildInvoiceSnapshot(invoice, effectiveTaxMode);
       const issued = await tx.invoice.update({
         where: { id: invoice.id },
         data: {
@@ -675,6 +720,7 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
           calculationSnapshot: snapshot.calculation,
           documentSnapshot: snapshot.document,
           paidTotal: new Prisma.Decimal(0),
+          creditedTotal: new Prisma.Decimal(0),
           balanceDue: invoice.grandTotal,
           issuedById: tenant.userId,
           issuedAt: new Date(),
@@ -711,7 +757,7 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
           action: "invoice.issue",
           entityType: "invoice",
           entityId: invoice.id,
-          metadata: { invoiceNumber, sequenceNumber }
+          metadata: { invoiceNumber, sequenceNumber, effectiveTaxMode }
         }
       });
 
@@ -726,18 +772,28 @@ export async function cancelInvoice(context: TenantContext, input: CancelInvoice
   assertPermission(tenant.role, "invoices:cancel");
 
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
     const invoice = await tx.invoice.findFirst({
       where: { id: input.invoiceId, organisationId: tenant.organisationId },
       include: { items: true }
     });
 
     if (!invoice) throw new Error("Invoice not found.");
-    if (invoice.status !== "issued") throw new Error("Only issued invoices can be cancelled.");
+    if (invoice.status !== "issued") throw new Error("Only issued invoices with no payments or credit notes can be cancelled.");
+    if (invoice.paidTotal.gt(0)) throw new Error("Reverse the payments on this invoice before cancelling it.");
+    const issuedCreditNotes = await tx.creditNote.count({
+      where: { organisationId: tenant.organisationId, originalInvoiceId: invoice.id, status: "issued" }
+    });
+    if (issuedCreditNotes > 0 || invoice.creditedTotal.gt(0)) {
+      throw new Error("This invoice has issued credit notes, so it cannot be cancelled.");
+    }
+    await assertDateNotLocked(tx, tenant.organisationId, invoice.invoiceDate, "cancel this invoice");
 
     const cancelled = await tx.invoice.update({
       where: { id: invoice.id },
       data: {
         status: "cancelled",
+        balanceDue: new Prisma.Decimal(0),
         cancelledById: tenant.userId,
         cancelledAt: new Date(),
         cancellationReason: input.reason,
@@ -746,11 +802,15 @@ export async function cancelInvoice(context: TenantContext, input: CancelInvoice
       }
     });
 
+    const lastRevision = await tx.invoiceRevision.aggregate({
+      where: { invoiceId: invoice.id },
+      _max: { revisionNumber: true }
+    });
     await tx.invoiceRevision.create({
       data: {
         organisationId: tenant.organisationId,
         invoiceId: invoice.id,
-        revisionNumber: 2,
+        revisionNumber: (lastRevision._max.revisionNumber ?? 0) + 1,
         reason: `Cancelled: ${input.reason}`,
         snapshot: JSON.parse(JSON.stringify(invoice)),
         createdById: tenant.userId
@@ -801,7 +861,9 @@ export async function generateInvoicePdf(context: TenantContext, invoiceId: stri
     import("@/lib/documents/document-storage")
   ]);
   const pdfData = buildInvoicePdfData(invoice);
-  const buffer = await renderInvoicePdf(pdfData);
+  const { loadCompanyImages } = await import("@/lib/files/company-images");
+  const images = await loadCompanyImages(tenant.organisationId, pdfData.company);
+  const buffer = await renderInvoicePdf({ ...pdfData, ...images });
   const stored = await writePrivateDocument(
     invoicePdfStorageKey(tenant.organisationId, invoice.id),
     buffer
@@ -841,7 +903,7 @@ export async function generateInvoicePdf(context: TenantContext, invoiceId: stri
   };
 }
 
-function buildInvoiceSnapshot(invoice: InvoiceSnapshotSource) {
+function buildInvoiceSnapshot(invoice: InvoiceSnapshotSource, effectiveTaxMode: string) {
   return {
     company: invoice?.company ? JSON.parse(JSON.stringify(invoice.company)) : null,
     buyer: invoice?.buyer ? JSON.parse(JSON.stringify(invoice.buyer)) : null,
@@ -861,6 +923,7 @@ function buildInvoiceSnapshot(invoice: InvoiceSnapshotSource) {
       sgstTotal: invoice?.sgstTotal.toString(),
       roundOff: invoice?.roundOff.toString(),
       grandTotal: invoice?.grandTotal.toString(),
+      effectiveTaxMode,
       items: invoice?.items ? JSON.parse(JSON.stringify(invoice.items)) : []
     },
     document: {
@@ -874,7 +937,7 @@ function buildInvoicePdfData(invoice: InvoicePdfSource): InvoicePdfData {
   const company = asRecord(invoice.companySnapshot) ?? asRecord(invoice.company);
   const buyer = asRecord(invoice.buyerSnapshot) ?? asRecord(invoice.buyer);
   const consigneeSnapshot = asRecord(invoice.consigneeSnapshot);
-  const bank = asRecord(invoice.bankSnapshot) ?? asRecord(invoice.bankAccount);
+  const bank = bankRecordForDocument(asRecord(invoice.bankSnapshot) ?? asRecord(invoice.bankAccount));
   const calculation = asRecord(invoice.calculationSnapshot);
 
   return {

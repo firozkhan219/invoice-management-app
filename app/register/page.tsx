@@ -1,11 +1,29 @@
 import Link from "next/link";
+import { connection } from "next/server";
+import { FlashMessage } from "@/components/flash-message";
+import { isRegistrationOpen } from "@/lib/auth/auth-service";
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  await connection();
+  if (!(await isRegistrationOpen())) {
+    return (
+      <main className="auth-page">
+        <section className="auth-card">
+          <p className="muted">Invoice Management</p>
+          <h1>Registration is closed</h1>
+          <p className="muted">Ask an owner or admin of your organisation to add you from Users &amp; Roles.</p>
+          <Link href="/login">Sign in</Link>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="auth-page">
       <section className="auth-card">
         <p className="muted">Invoice Management</p>
         <h1>Create account</h1>
+        <FlashMessage />
         <form className="form" action="/api/auth/register" method="post">
           <div className="field">
             <label htmlFor="name">Name</label>

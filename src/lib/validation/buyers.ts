@@ -46,3 +46,25 @@ export const buyerAddressSchema = z.object({
 
 export type BuyerInput = z.infer<typeof buyerSchema>;
 export type BuyerAddressInput = z.infer<typeof buyerAddressSchema>;
+
+const uuid = z.string().uuid();
+
+export const buyerUpdateSchema = buyerSchema.omit({ isActive: true }).extend({ buyerId: uuid });
+
+export const buyerAddressUpdateSchema = buyerAddressSchema.omit({ isActive: true, buyerId: true }).extend({ addressId: uuid });
+
+export const buyerToggleSchema = z.object({
+  kind: z.enum(["buyer", "address"]),
+  id: uuid,
+  active: z.enum(["true", "false"]).transform((value) => value === "true")
+});
+
+export const BUYER_CLEARABLE_FIELDS = [
+  "legalName", "contactPerson", "phone", "email", "gstin", "pan", "iec", "customerReference", "notes"
+] as const;
+
+export const BUYER_ADDRESS_CLEARABLE_FIELDS = ["contactPerson", "phone", "email", "addressLine2", "stateCode"] as const;
+
+export type BuyerUpdateInput = z.infer<typeof buyerUpdateSchema>;
+export type BuyerAddressUpdateInput = z.infer<typeof buyerAddressUpdateSchema>;
+export type BuyerToggleInput = z.infer<typeof buyerToggleSchema>;
