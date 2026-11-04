@@ -17,7 +17,7 @@ export const creditNoteUpdateSchema = z.object({
 export const creditNoteLineSchema = z.object({
   creditNoteId: z.string().uuid(),
   invoiceItemId: z.string().uuid(),
-  quantity: z.coerce.number().min(0),
+  quantity: z.coerce.number().positive(),
   rate: z.coerce.number().min(0),
   discountAmount: z.coerce.number().min(0).default(0)
 });

@@ -30,6 +30,30 @@ export type InvoiceTotals = {
 
 const ZERO = new Prisma.Decimal(0);
 
+export type TaxPlaceInput = {
+  supplierStateCode?: string | null;
+  placeOfSupplyStateCode?: string | null;
+};
+
+function normaliseStateCode(code: string | null | undefined): string | null {
+  const trimmed = code?.trim().toUpperCase();
+  if (!trimmed) return null;
+  return /^\d+$/.test(trimmed) ? String(Number(trimmed)) : trimmed;
+}
+
+/**
+ * Turns "automatic" into the concrete GST treatment: CGST+SGST when the supplier's state
+ * equals the place of supply (intra-state), IGST otherwise. If either state is unknown,
+ * IGST is used (same as before) — callers should make sure state codes are filled in.
+ */
+export function resolveTaxMode(taxMode: TaxModeInput, place: TaxPlaceInput): Exclude<TaxModeInput, "automatic"> {
+  if (taxMode !== "automatic") return taxMode;
+  const supplier = normaliseStateCode(place.supplierStateCode);
+  const placeOfSupply = normaliseStateCode(place.placeOfSupplyStateCode);
+  if (supplier && placeOfSupply && supplier === placeOfSupply) return "cgst_sgst";
+  return "igst";
+}
+
 function decimal(value: string | number | Prisma.Decimal | undefined): Prisma.Decimal {
   if (value === undefined || value === "") return ZERO;
   return new Prisma.Decimal(value);

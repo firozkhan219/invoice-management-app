@@ -542,6 +542,7 @@ model Invoice {
   grandTotal            Decimal       @default(0) @map("grand_total") @db.Decimal(18, 4)
   paidTotal             Decimal       @default(0) @map("paid_total") @db.Decimal(18, 4)
   balanceDue            Decimal       @default(0) @map("balance_due") @db.Decimal(18, 4)
+  creditedTotal         Decimal       @default(0) @map("credited_total") @db.Decimal(18, 4)
   version               Int           @default(1)
   companySnapshot       Json?         @map("company_snapshot")
   buyerSnapshot         Json?         @map("buyer_snapshot")
@@ -580,6 +581,7 @@ model Invoice {
   @@index([organisationId, status, invoiceDate])
   @@index([organisationId, buyerId])
   @@index([organisationId, invoiceNumber])
+  @@unique([organisationId, invoiceNumber])
   @@map("invoices")
 }
 
@@ -672,6 +674,7 @@ model CreditNote {
   @@index([organisationId, status, creditNoteDate])
   @@index([organisationId, originalInvoiceId])
   @@index([organisationId, creditNoteNumber])
+  @@unique([organisationId, creditNoteNumber])
   @@map("credit_notes")
 }
 

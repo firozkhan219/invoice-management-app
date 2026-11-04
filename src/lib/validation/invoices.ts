@@ -5,6 +5,10 @@ const optionalText = (max: number) =>
 
 const optionalUuid = z.string().uuid().optional().or(z.literal("")).transform((value) => value || undefined);
 
+const blankToUndefined = (value: unknown) => (value === "" || value === null ? undefined : value);
+const optionalAmount = (max?: number) =>
+  z.preprocess(blankToUndefined, (max === undefined ? z.coerce.number().min(0) : z.coerce.number().min(0).max(max)).optional());
+
 export const invoiceDraftSchema = z.object({
   companyId: optionalUuid,
   buyerId: optionalUuid,
@@ -37,15 +41,16 @@ export const invoiceDraftSchema = z.object({
 export const invoiceItemSchema = z.object({
   invoiceId: z.string().uuid(),
   itemId: optionalUuid,
-  sortOrder: z.coerce.number().int().min(1).default(1),
+  sortOrder: z.preprocess(blankToUndefined, z.coerce.number().int().min(1).optional()),
   sku: optionalText(80),
-  description: z.string().trim().min(1).max(5000),
+  // Description, rate and GST may be left blank when a catalog item is chosen; the item fills them.
+  description: optionalText(5000),
   hsnSac: optionalText(20),
-  quantity: z.coerce.number().min(0),
+  quantity: z.coerce.number().positive(),
   unitCode: optionalText(20),
-  rate: z.coerce.number().min(0),
-  discountAmount: z.coerce.number().min(0).default(0),
-  gstRate: z.coerce.number().min(0).max(100).default(0),
+  rate: optionalAmount(),
+  discountAmount: z.preprocess(blankToUndefined, z.coerce.number().min(0).default(0)),
+  gstRate: optionalAmount(100),
   expectedVersion: z.coerce.number().int().min(1)
 });
 

@@ -1,21 +1,16 @@
-import { redirect } from "next/navigation";
 import { loginUser } from "@/lib/auth/auth-service";
+import { seeOther, userFacingMessage, withFlash, zodMessage } from "@/lib/http/form";
 import { loginSchema } from "@/lib/validation/auth";
 
 export async function POST(request: Request) {
-  const formData = await request.formData();
-  const parsed = loginSchema.safeParse(Object.fromEntries(formData));
-
-  if (!parsed.success) {
-    return Response.json({ ok: false, errors: parsed.error.flatten().fieldErrors }, { status: 400 });
-  }
+  const parsed = loginSchema.safeParse(Object.fromEntries(await request.formData()));
+  if (!parsed.success) return seeOther(withFlash("/login", "error", zodMessage(parsed.error)));
 
   try {
     await loginUser(parsed.data);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Login failed.";
-    return Response.json({ ok: false, error: message }, { status: 500 });
+    return seeOther(withFlash("/login", "error", userFacingMessage(error, "Sign in failed.")));
   }
 
-  redirect("/dashboard");
+  return seeOther("/dashboard");
 }

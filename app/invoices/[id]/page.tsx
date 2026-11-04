@@ -3,33 +3,42 @@ import { redirect } from "next/navigation";
 import { Ban, CreditCard, FileClock, FileText, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getInvoice, getInvoiceEditorData } from "@/lib/invoices/invoice-service";
+import { getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
 import { draftIssueRequirements } from "@/lib/invoices/lifecycle";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
+import { DraftFields, isoDate } from "../draft-fields";
 
 export default async function InvoiceEditorPage({
   params,
   searchParams
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ error?: string }>;
+  searchParams?: Promise<Record<string, string | undefined>>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const context = await getTenantContextForUser(user.id);
-  if (!context) redirect("/register");
+  if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
   const { id } = await params;
   const invoice = await getInvoice(context, id);
-  const editorData = await getInvoiceEditorData(context);
   if (!invoice) redirect("/invoices");
-  const query = await searchParams;
-  const errorMessage = query?.error;
+  await searchParams;
+  const mayCreate = hasPermission(context.role, "invoices:create");
+  const mayIssue = hasPermission(context.role, "invoices:issue");
+  const mayCancel = hasPermission(context.role, "invoices:cancel");
+  const mayManagePayments = hasPermission(context.role, "payments:manage");
   const isDraft = invoice.status === "draft";
+  const editorData = isDraft && mayCreate ? await getInvoiceEditorData(context) : null;
+  const issueOptions = isDraft && mayIssue ? await getInvoiceIssueOptions(context) : null;
+  const seriesList = issueOptions?.series ?? [];
   const canOpenPdf = ["issued", "partially_paid", "paid"].includes(invoice.status);
-  const canRecordPayment = ["issued", "partially_paid"].includes(invoice.status) && invoice.balanceDue.gt(0);
-  const canCreateCreditNote = ["issued", "partially_paid", "paid"].includes(invoice.status);
-  const canIssue = Boolean(invoice.companyId && invoice.buyerId && invoice.items.length > 0 && invoice.grandTotal.gt(0) && editorData.series.length > 0);
+  const canRecordPayment = mayManagePayments && ["issued", "partially_paid"].includes(invoice.status) && invoice.balanceDue.gt(0);
+  const canCreateCreditNote = mayCreate && ["issued", "partially_paid", "paid"].includes(invoice.status);
+  const canCancel = mayCancel && invoice.status === "issued" && invoice.paidTotal.lte(0) && invoice.creditedTotal.lte(0);
+  const canIssue = Boolean(mayIssue && invoice.companyId && invoice.buyerId && invoice.items.length > 0 && invoice.grandTotal.gt(0) && seriesList.length > 0);
+  const paymentHref = `/payments?invoiceId=${invoice.id}`;
   const statusLabel = invoice.status.replace("_", " ");
   const issueRequirements = [
     ...draftIssueRequirements({
@@ -39,13 +48,11 @@ export default async function InvoiceEditorPage({
       itemCount: invoice.items.length,
       grandTotal: invoice.grandTotal
     }),
-    editorData.series.length === 0 ? "create an invoice number series" : null
+    mayIssue && seriesList.length === 0 ? "create an invoice number series" : null
   ].filter((requirement): requirement is string => Boolean(requirement));
 
   return (
     <AppShell>
-      {errorMessage ? <p className="notice error">{errorMessage}</p> : null}
-
       <header className="page-header">
         <div>
           <p className="muted">Invoice workspace</p>
@@ -65,7 +72,7 @@ export default async function InvoiceEditorPage({
             </a>
           ) : null}
           {canRecordPayment ? (
-            <Link className="button subtle" href="/payments">
+            <Link className="button subtle" href={paymentHref}>
               <CreditCard size={18} />
               Record payment
             </Link>
@@ -82,6 +89,12 @@ export default async function InvoiceEditorPage({
           <span className="muted">Paid</span>
           <strong>{invoice.currency} {invoice.paidTotal.toString()}</strong>
         </div>
+        {invoice.creditedTotal.gt(0) ? (
+          <div className="stat">
+            <span className="muted">Credited</span>
+            <strong>{invoice.currency} {invoice.creditedTotal.toString()}</strong>
+          </div>
+        ) : null}
         <div className="stat">
           <span className="muted">Balance</span>
           <strong>{invoice.currency} {invoice.balanceDue.toString()}</strong>
@@ -105,7 +118,10 @@ export default async function InvoiceEditorPage({
               <tr><th>Due date</th><td>{invoice.dueDate ? invoice.dueDate.toISOString().slice(0, 10) : "-"}</td></tr>
               <tr><th>Buyer order</th><td>{invoice.buyerOrderNumber || "-"}</td></tr>
               <tr><th>Exporter reference</th><td>{invoice.exporterReference || "-"}</td></tr>
-              <tr><th>Tax mode</th><td>{invoice.taxMode}</td></tr>
+              <tr><th>Tax mode</th><td>{invoice.taxMode.replace("_", " ")}{invoice.cgstTotal.gt(0) ? " → CGST + SGST" : invoice.igstTotal.gt(0) ? " → IGST" : ""}</td></tr>
+              <tr><th>Place of supply</th><td>{invoice.placeOfSupplyStateCode || invoice.shippingAddress?.stateCode || invoice.billingAddress?.stateCode || "-"}</td></tr>
+              <tr><th>Invoice discount</th><td>{invoice.invoiceDiscount.toString()}</td></tr>
+              <tr><th>Other charges</th><td>{invoice.otherCharges.toString()}</td></tr>
               <tr><th>Subtotal</th><td>{invoice.subtotal.toString()}</td></tr>
               <tr><th>IGST</th><td>{invoice.igstTotal.toString()}</td></tr>
               <tr><th>CGST</th><td>{invoice.cgstTotal.toString()}</td></tr>
@@ -134,11 +150,12 @@ export default async function InvoiceEditorPage({
                   <tr>
                     <th>#</th>
                     <th>Description</th>
+                    <th>HSN/SAC</th>
                     <th>Qty</th>
                     <th>Rate</th>
                     <th>GST</th>
                     <th>Total</th>
-                    {isDraft ? <th>Actions</th> : null}
+                    {isDraft && mayCreate ? <th>Actions</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -146,11 +163,12 @@ export default async function InvoiceEditorPage({
                     <tr key={item.id}>
                       <td>{item.sortOrder}</td>
                       <td>{item.description}</td>
+                      <td>{item.hsnSac || "-"}</td>
                       <td>{item.quantity.toString()} {item.unitCode || ""}</td>
                       <td>{item.rate.toString()}</td>
                       <td>{item.gstRate.toString()}%</td>
                       <td>{item.lineTotal.toString()}</td>
-                      {isDraft ? (
+                      {isDraft && mayCreate ? (
                         <td>
                           <div className="line-actions">
                             <details className="details compact">
@@ -162,15 +180,18 @@ export default async function InvoiceEditorPage({
                                 <input type="hidden" name="sortOrder" value={item.sortOrder} />
                                 <input type="hidden" name="itemId" value={item.itemId || ""} />
                                 <input type="hidden" name="sku" value={item.sku || ""} />
-                                <input type="hidden" name="hsnSac" value={item.hsnSac || ""} />
                                 <div className="field">
                                   <label htmlFor={`description-${item.id}`}>Description</label>
                                   <textarea id={`description-${item.id}`} name="description" defaultValue={item.description} required />
                                 </div>
+                                <div className="field">
+                                  <label htmlFor={`hsn-${item.id}`}>HSN/SAC</label>
+                                  <input id={`hsn-${item.id}`} name="hsnSac" defaultValue={item.hsnSac || ""} maxLength={20} />
+                                </div>
                                 <div className="form-grid">
                                   <div className="field">
                                     <label htmlFor={`quantity-${item.id}`}>Qty</label>
-                                    <input id={`quantity-${item.id}`} name="quantity" type="number" step="0.0001" min="0" defaultValue={item.quantity.toString()} required />
+                                    <input id={`quantity-${item.id}`} name="quantity" type="number" step="0.0001" min="0.0001" defaultValue={item.quantity.toString()} required />
                                   </div>
                                   <div className="field">
                                     <label htmlFor={`unit-${item.id}`}>Unit</label>
@@ -304,7 +325,7 @@ export default async function InvoiceEditorPage({
             </section>
           ) : null}
 
-          {isDraft ? (
+          {isDraft && mayIssue ? (
             <section className="panel">
               <div className="section-title">
                 <div>
@@ -316,7 +337,7 @@ export default async function InvoiceEditorPage({
               {issueRequirements.length > 0 ? (
                 <p className="notice error">Before issuing: {issueRequirements.join(", ")}.</p>
               ) : null}
-              {editorData.series.length === 0 ? (
+              {seriesList.length === 0 ? (
                 <p className="muted">Create an invoice number series in Settings first.</p>
               ) : (
                 <form className="form" action="/api/invoices/issue" method="post">
@@ -325,9 +346,9 @@ export default async function InvoiceEditorPage({
                   <div className="field">
                     <label htmlFor="seriesId">Number series</label>
                     <select id="seriesId" name="seriesId" required>
-                      {editorData.series.map((series) => (
+                      {seriesList.map((series) => (
                         <option key={series.id} value={series.id}>
-                          {series.name} - next {previewInvoiceNumber(series, invoice.invoiceDate, editorData.organisation.financialYearStart)}
+                          {series.name} - next {previewInvoiceNumber(series, invoice.invoiceDate, issueOptions!.organisation.financialYearStart)}
                         </option>
                       ))}
                     </select>
@@ -356,7 +377,7 @@ export default async function InvoiceEditorPage({
                   Open PDF
                 </a>
                 {canRecordPayment ? (
-                  <Link className="button subtle" href="/payments">
+                  <Link className="button subtle" href={paymentHref}>
                     <CreditCard size={18} />
                     Record payment
                   </Link>
@@ -365,7 +386,7 @@ export default async function InvoiceEditorPage({
             </section>
           ) : null}
 
-          {invoice.status === "issued" ? (
+          {canCancel ? (
             <section className="panel">
               <div className="section-title">
                 <div>
@@ -388,7 +409,7 @@ export default async function InvoiceEditorPage({
             </section>
           ) : null}
 
-          {isDraft ? (
+          {isDraft && editorData ? (
           <>
           <section className="panel">
             <div className="section-title">
@@ -400,6 +421,9 @@ export default async function InvoiceEditorPage({
             </div>
             <form className="form" action="/api/invoices/delete" method="post">
               <input type="hidden" name="invoiceId" value={invoice.id} />
+              <label className="checkbox">
+                <input type="checkbox" name="confirm" required /> Permanently delete this draft
+              </label>
               <button className="button danger" type="submit">
                 <Trash2 size={18} />
                 Delete draft
@@ -417,64 +441,36 @@ export default async function InvoiceEditorPage({
             <form className="form" action="/api/invoices" method="post">
               <input type="hidden" name="invoiceId" value={invoice.id} />
               <input type="hidden" name="version" value={invoice.version} />
-              <div className="field">
-                <label htmlFor="companyId">Company</label>
-                <select id="companyId" name="companyId" defaultValue={invoice.companyId || ""}>
-                  <option value="">None</option>
-                  {editorData.companies.map((company) => <option key={company.id} value={company.id}>{company.legalName}</option>)}
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="buyerId">Buyer</label>
-                <select id="buyerId" name="buyerId" defaultValue={invoice.buyerId || ""}>
-                  <option value="">None</option>
-                  {editorData.buyers.map((buyer) => <option key={buyer.id} value={buyer.id}>{buyer.displayName}</option>)}
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="bankAccountId">Bank account</label>
-                <select id="bankAccountId" name="bankAccountId" defaultValue={invoice.bankAccountId || ""}>
-                  <option value="">None</option>
-                  {editorData.bankAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>{account.bankName} - {account.accountNumberLast4}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-grid">
-                <div className="field"><label htmlFor="invoiceDate">Invoice date</label><input id="invoiceDate" name="invoiceDate" type="date" defaultValue={invoice.invoiceDate.toISOString().slice(0, 10)} required /></div>
-                <div className="field"><label htmlFor="dueDate">Due date</label><input id="dueDate" name="dueDate" type="date" defaultValue={invoice.dueDate?.toISOString().slice(0, 10) || ""} /></div>
-                <div className="field"><label htmlFor="currency">Currency</label><input id="currency" name="currency" defaultValue={invoice.currency} required /></div>
-              </div>
-              <div className="field">
-                <label htmlFor="taxMode">Tax mode</label>
-                <select id="taxMode" name="taxMode" defaultValue={invoice.taxMode}>
-                  <option value="automatic">Automatic</option>
-                  <option value="igst">IGST</option>
-                  <option value="cgst_sgst">CGST + SGST</option>
-                  <option value="zero_rated_export">Zero-rated export</option>
-                  <option value="no_tax">No tax</option>
-                </select>
-              </div>
-              <div className="form-grid">
-                <div className="field"><label htmlFor="buyerOrderNumber">Buyer order number</label><input id="buyerOrderNumber" name="buyerOrderNumber" defaultValue={invoice.buyerOrderNumber || ""} /></div>
-                <div className="field"><label htmlFor="exporterReference">Exporter reference</label><input id="exporterReference" name="exporterReference" defaultValue={invoice.exporterReference || ""} /></div>
-              </div>
-              <details className="details">
-                <summary>Shipping and export fields</summary>
-                <div className="form-grid">
-                  <div className="field"><label htmlFor="preCarriageBy">Pre-carriage by</label><input id="preCarriageBy" name="preCarriageBy" defaultValue={invoice.preCarriageBy || ""} /></div>
-                  <div className="field"><label htmlFor="placeOfReceipt">Place of receipt</label><input id="placeOfReceipt" name="placeOfReceipt" defaultValue={invoice.placeOfReceipt || ""} /></div>
-                  <div className="field"><label htmlFor="vesselFlightNo">Vessel/flight no.</label><input id="vesselFlightNo" name="vesselFlightNo" defaultValue={invoice.vesselFlightNo || ""} /></div>
-                  <div className="field"><label htmlFor="portOfLoading">Port of loading</label><input id="portOfLoading" name="portOfLoading" defaultValue={invoice.portOfLoading || ""} /></div>
-                  <div className="field"><label htmlFor="portOfDischarge">Port of discharge</label><input id="portOfDischarge" name="portOfDischarge" defaultValue={invoice.portOfDischarge || ""} /></div>
-                  <div className="field"><label htmlFor="finalDestination">Final destination</label><input id="finalDestination" name="finalDestination" defaultValue={invoice.finalDestination || ""} /></div>
-                </div>
-                <div className="field"><label htmlFor="termsOfDelivery">Terms of delivery and payment</label><textarea id="termsOfDelivery" name="termsOfDelivery" defaultValue={invoice.termsOfDelivery || ""} /></div>
-              </details>
-              <div className="field"><label htmlFor="notes">Notes</label><textarea id="notes" name="notes" defaultValue={invoice.notes || ""} /></div>
-              <div className="field"><label htmlFor="declaration">Declaration</label><textarea id="declaration" name="declaration" defaultValue={invoice.declaration || ""} /></div>
-              <input type="hidden" name="invoiceDiscount" value={invoice.invoiceDiscount.toString()} />
-              <input type="hidden" name="otherCharges" value={invoice.otherCharges.toString()} />
+              <DraftFields
+                editor={editorData}
+                values={{
+                  companyId: invoice.companyId,
+                  buyerId: invoice.buyerId,
+                  consigneeBuyerId: invoice.consigneeBuyerId,
+                  billingAddressId: invoice.billingAddressId,
+                  shippingAddressId: invoice.shippingAddressId,
+                  bankAccountId: invoice.bankAccountId,
+                  invoiceDate: isoDate(invoice.invoiceDate),
+                  dueDate: isoDate(invoice.dueDate),
+                  currency: invoice.currency,
+                  placeOfSupplyStateCode: invoice.placeOfSupplyStateCode,
+                  taxMode: invoice.taxMode,
+                  buyerOrderNumber: invoice.buyerOrderNumber,
+                  buyerOrderDate: isoDate(invoice.buyerOrderDate),
+                  exporterReference: invoice.exporterReference,
+                  preCarriageBy: invoice.preCarriageBy,
+                  placeOfReceipt: invoice.placeOfReceipt,
+                  vesselFlightNo: invoice.vesselFlightNo,
+                  portOfLoading: invoice.portOfLoading,
+                  portOfDischarge: invoice.portOfDischarge,
+                  finalDestination: invoice.finalDestination,
+                  termsOfDelivery: invoice.termsOfDelivery,
+                  notes: invoice.notes,
+                  declaration: invoice.declaration,
+                  invoiceDiscount: invoice.invoiceDiscount.toString(),
+                  otherCharges: invoice.otherCharges.toString()
+                }}
+              />
               <button className="button" type="submit">
                 <Save size={18} />
                 Save draft
@@ -492,24 +488,31 @@ export default async function InvoiceEditorPage({
             <form className="form" action="/api/invoices/items" method="post">
               <input type="hidden" name="invoiceId" value={invoice.id} />
               <input type="hidden" name="expectedVersion" value={invoice.version} />
-              <input type="hidden" name="sortOrder" value={invoice.items.length + 1} />
               <div className="field">
                 <label htmlFor="itemId">Catalog item</label>
                 <select id="itemId" name="itemId" defaultValue="">
                   <option value="">Manual line</option>
-                  {editorData.masterItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  {editorData.masterItems.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}{item.saleRate ? ` - ${item.currency} ${item.saleRate.toString()}` : ""}{item.hsnSac ? ` - HSN ${item.hsnSac}` : ""}
+                    </option>
+                  ))}
                 </select>
+                <p className="muted">With a catalog item, blank description, HSN, unit, rate and GST are filled from the item.</p>
               </div>
-              <div className="field"><label htmlFor="description">Description</label><textarea id="description" name="description" required /></div>
+              <div className="field"><label htmlFor="description">Description</label><textarea id="description" name="description" /></div>
               <div className="form-grid">
-                <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" type="number" step="0.0001" min="0" required /></div>
+                <div className="field"><label htmlFor="hsnSac">HSN/SAC</label><input id="hsnSac" name="hsnSac" maxLength={20} /></div>
                 <div className="field"><label htmlFor="unitCode">Unit</label><input id="unitCode" name="unitCode" /></div>
               </div>
               <div className="form-grid">
-                <div className="field"><label htmlFor="rate">Rate</label><input id="rate" name="rate" type="number" step="0.0001" min="0" required /></div>
-                <div className="field"><label htmlFor="gstRate">GST %</label><input id="gstRate" name="gstRate" type="number" step="0.0001" min="0" max="100" defaultValue="0" /></div>
+                <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" type="number" step="0.0001" min="0.0001" required /></div>
+                <div className="field"><label htmlFor="rate">Rate</label><input id="rate" name="rate" type="number" step="0.0001" min="0" /></div>
               </div>
-              <input type="hidden" name="discountAmount" value="0" />
+              <div className="form-grid">
+                <div className="field"><label htmlFor="gstRate">GST %</label><input id="gstRate" name="gstRate" type="number" step="0.0001" min="0" max="100" /></div>
+                <div className="field"><label htmlFor="discountAmount">Line discount</label><input id="discountAmount" name="discountAmount" type="number" step="0.01" min="0" defaultValue="0" /></div>
+              </div>
               <button className="button" type="submit">
                 <Plus size={18} />
                 Add line
@@ -517,7 +520,7 @@ export default async function InvoiceEditorPage({
             </form>
           </section>
           </>
-          ) : (
+          ) : isDraft ? null : (
             <section className="panel">
               <div className="section-title">
                 <div>
@@ -525,7 +528,7 @@ export default async function InvoiceEditorPage({
                   <h2>Draft editing closed</h2>
                 </div>
               </div>
-              <p className="muted">This invoice has been issued, so changes must be handled through payments, cancellation, or a new invoice.</p>
+              <p className="muted">This invoice has been issued, so changes must be handled through payments, credit notes, cancellation, or a new invoice.</p>
             </section>
           )}
         </aside>

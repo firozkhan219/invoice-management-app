@@ -29,6 +29,51 @@ export function renderInvoiceNumber(input: SeriesPatternInput): string {
     .replace(/#+/g, (match) => formatSequence(input.sequence, match.length));
 }
 
+/** UTC [start, end) range of the numbering period that contains `date`, or null for "never". */
+export function periodRangeForRule(
+  rule: "never" | "calendar_year" | "financial_year",
+  date: Date,
+  financialYearStartMonth: number
+): { start: Date; end: Date } | null {
+  if (rule === "never") return null;
+  const year = date.getUTCFullYear();
+  if (rule === "calendar_year") {
+    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year + 1, 0, 1)) };
+  }
+  const startYear = date.getUTCMonth() + 1 >= financialYearStartMonth ? year : year - 1;
+  return {
+    start: new Date(Date.UTC(startYear, financialYearStartMonth - 1, 1)),
+    end: new Date(Date.UTC(startYear + 1, financialYearStartMonth - 1, 1))
+  };
+}
+
+export type SeriesState = {
+  resetRule: "never" | "calendar_year" | "financial_year";
+  startingNumber: number;
+  nextSequence: number;
+  lastResetKey: string | null;
+};
+
+/**
+ * Chooses the sequence for a document dated `date`, based on the highest sequence already
+ * used in that document's own period (so back-dated documents never restart a newer period),
+ * and says how the series counters should be updated afterwards.
+ */
+export function planSequence(
+  series: SeriesState,
+  date: Date,
+  financialYearStartMonth: number,
+  maxUsedInPeriod: number | null
+): { sequence: number; resetKey: string | null; advanceSeries: boolean } {
+  const resetKey = resetKeyForRule(series.resetRule, date, financialYearStartMonth);
+  const fromHistory = maxUsedInPeriod === null ? series.startingNumber : maxUsedInPeriod + 1;
+  const isCurrentOrNewerPeriod = resetKey === null || series.lastResetKey === null || resetKey >= series.lastResetKey;
+  const fromCounter = resetKey === null || series.lastResetKey === resetKey ? series.nextSequence : series.startingNumber;
+  const sequence = Math.max(series.startingNumber, fromHistory, isCurrentOrNewerPeriod ? fromCounter : 0);
+
+  return { sequence, resetKey, advanceSeries: isCurrentOrNewerPeriod };
+}
+
 export function resetKeyForRule(
   rule: "never" | "calendar_year" | "financial_year",
   date: Date,

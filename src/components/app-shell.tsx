@@ -1,35 +1,14 @@
-"use client";
+import { LogOut } from "lucide-react";
+import { FlashMessage } from "@/components/flash-message";
+import { AppNav } from "@/components/app-nav";
+import { getCurrentUser } from "@/lib/auth/session";
+import { getTenantContextForUser, listActiveMemberships } from "@/lib/organisations/membership";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import {
-  Building2,
-  CreditCard,
-  FileMinus2,
-  FileBarChart,
-  FileText,
-  Gauge,
-  Package,
-  Settings,
-  ShieldCheck,
-  Users
-} from "lucide-react";
-
-const navItems = [
-  { label: "Dashboard", href: "/dashboard", icon: Gauge },
-  { label: "Invoices", href: "/invoices", icon: FileText },
-  { label: "Credit Notes", href: "/credit-notes", icon: FileMinus2 },
-  { label: "Payments", href: "/payments", icon: CreditCard },
-  { label: "Buyers", href: "/buyers", icon: Users },
-  { label: "Items", href: "/items", icon: Package },
-  { label: "Companies", href: "/companies", icon: Building2 },
-  { label: "Reports", href: "/reports", icon: FileBarChart },
-  { label: "Users & Roles", href: "/dashboard", icon: ShieldCheck },
-  { label: "Settings", href: "/settings", icon: Settings }
-];
-
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
+export async function AppShell({ children }: { children: React.ReactNode }) {
+  const user = await getCurrentUser();
+  const context = user ? await getTenantContextForUser(user.id) : null;
+  const memberships = user ? await listActiveMemberships(user.id) : [];
+  const active = memberships.find((membership) => membership.organisationId === context?.organisationId);
 
   return (
     <main className="shell">
@@ -38,23 +17,41 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <span className="brand-mark">IM</span>
           <span>Invoice Management</span>
         </div>
-        <nav className="nav" aria-label="Main navigation">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const active = item.href !== "/dashboard"
-              ? pathname === item.href || pathname.startsWith(`${item.href}/`)
-              : pathname === item.href;
-
-            return (
-              <Link aria-current={active ? "page" : undefined} className={active ? "active" : undefined} href={item.href} key={item.label}>
-                <Icon size={18} />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
+        <AppNav />
+        {user ? (
+          <div className="sidebar-account">
+            {memberships.length > 1 ? (
+              <form action="/api/organisations/switch" method="post" className="form compact-form">
+                <label htmlFor="organisation-switch" className="muted">Organisation</label>
+                <select id="organisation-switch" name="organisationId" defaultValue={context?.organisationId}>
+                  {memberships.map((membership) => (
+                    <option key={membership.organisationId} value={membership.organisationId}>
+                      {membership.organisation.name}
+                    </option>
+                  ))}
+                </select>
+                <button className="button subtle" type="submit">Switch</button>
+              </form>
+            ) : active ? (
+              <p className="muted">{active.organisation.name}</p>
+            ) : null}
+            <p className="muted">
+              {user.name || user.email}
+              {context ? ` · ${context.role}` : ""}
+            </p>
+            <form action="/api/auth/logout" method="post">
+              <button className="button subtle" type="submit">
+                <LogOut size={16} />
+                Sign out
+              </button>
+            </form>
+          </div>
+        ) : null}
       </aside>
-      <section className="content">{children}</section>
+      <section className="content">
+        <FlashMessage />
+        {children}
+      </section>
     </main>
   );
 }

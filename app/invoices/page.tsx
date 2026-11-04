@@ -6,6 +6,7 @@ import { draftIssueRequirements, draftLifecycleLabel } from "@/lib/invoices/life
 import { getCurrentUser } from "@/lib/auth/session";
 import { getInvoiceIssueOptions, listInvoices } from "@/lib/invoices/invoice-service";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
 
 export default async function InvoicesPage({
@@ -16,10 +17,13 @@ export default async function InvoicesPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const context = await getTenantContextForUser(user.id);
-  if (!context) redirect("/register");
+  if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
   const filters = await searchParams;
   const invoices = await listInvoices(context, filters);
-  const issueOptions = await getInvoiceIssueOptions(context);
+  const mayCreate = hasPermission(context.role, "invoices:create");
+  const issueOptions = hasPermission(context.role, "invoices:issue")
+    ? await getInvoiceIssueOptions(context)
+    : { series: [], organisation: { financialYearStart: 4 } };
   const query = new URLSearchParams();
   Object.entries(filters || {}).forEach(([key, value]) => {
     if (value) query.set(key, value);
@@ -38,10 +42,12 @@ export default async function InvoicesPage({
             <Download size={18} />
             Export CSV
           </a>
-          <Link className="button" href="/invoices/new">
-            <FilePlus2 size={18} />
-            New draft
-          </Link>
+          {mayCreate ? (
+            <Link className="button" href="/invoices/new">
+              <FilePlus2 size={18} />
+              New draft
+            </Link>
+          ) : null}
         </div>
       </header>
       <section className="panel">
@@ -113,7 +119,7 @@ export default async function InvoicesPage({
                   const canIssue = invoice.status === "draft"
                     && issueRequirements.length === 0
                     && issueOptions.series.length > 0;
-                  const canDeleteEmptyDraft = invoice.status === "draft" && invoice.items.length === 0;
+                  const canDeleteEmptyDraft = mayCreate && invoice.status === "draft" && invoice.items.length === 0;
 
                   return (
                     <tr key={invoice.id}>

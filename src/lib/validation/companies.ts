@@ -49,3 +49,34 @@ export const bankAccountSchema = z.object({
 
 export type CompanyInput = z.infer<typeof companySchema>;
 export type BankAccountInput = z.infer<typeof bankAccountSchema>;
+
+const uuid = z.string().uuid();
+
+/** Edit form: isActive is managed by the activate/deactivate toggle, not this form. */
+export const companyUpdateSchema = companySchema.omit({ isActive: true }).extend({ companyId: uuid });
+
+export const bankAccountUpdateSchema = bankAccountSchema
+  .omit({ isActive: true, companyId: true })
+  .extend({
+    bankAccountId: uuid,
+    // Leave blank to keep the stored (encrypted) number.
+    accountNumber: z.string().trim().max(40).optional().transform((value) => value || undefined)
+      .refine((value) => value === undefined || value.replace(/\s+/g, "").length >= 4, "Account number must have at least 4 digits.")
+  });
+
+export const companyToggleSchema = z.object({
+  kind: z.enum(["company", "bank_account"]),
+  id: uuid,
+  active: z.enum(["true", "false"]).transform((value) => value === "true")
+});
+
+export const COMPANY_CLEARABLE_FIELDS = [
+  "tradingName", "addressLine2", "stateCode", "phone", "email", "gstin", "pan", "iec",
+  "signatoryName", "signatoryDesignation", "defaultDeclaration", "defaultTerms"
+] as const;
+
+export const BANK_ACCOUNT_CLEARABLE_FIELDS = ["ifsc", "swiftBic", "branchCode", "branchName", "branchAddress"] as const;
+
+export type CompanyUpdateInput = z.infer<typeof companyUpdateSchema>;
+export type BankAccountUpdateInput = z.infer<typeof bankAccountUpdateSchema>;
+export type CompanyToggleInput = z.infer<typeof companyToggleSchema>;

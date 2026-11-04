@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getCreditNote, getCreditNoteWorkspace } from "@/lib/credit-notes/credit-note-service";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
 
 export default async function CreditNoteDetailPage({
@@ -12,24 +13,24 @@ export default async function CreditNoteDetailPage({
   searchParams
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ error?: string }>;
+  searchParams?: Promise<Record<string, string | undefined>>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const context = await getTenantContextForUser(user.id);
-  if (!context) redirect("/register");
+  if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
   const { id } = await params;
   const creditNote = await getCreditNote(context, id);
   if (!creditNote) redirect("/credit-notes");
-  const workspace = await getCreditNoteWorkspace(context);
-  const query = await searchParams;
-  const isDraft = creditNote.status === "draft";
+  await searchParams;
+  // Viewers can open credit notes; only roles that can create see the draft editing forms.
+  const isDraft = creditNote.status === "draft" && hasPermission(context.role, "invoices:create");
+  const workspace = isDraft ? await getCreditNoteWorkspace(context) : { series: [], organisation: { financialYearStart: 4 } };
   const canIssue = isDraft && creditNote.lines.length > 0 && creditNote.grandTotal.gt(0) && workspace.series.length > 0;
   const original = creditNote.originalInvoice;
 
   return (
     <AppShell>
-      {query?.error ? <p className="notice error">{query.error}</p> : null}
       <header className="page-header">
         <div>
           <p className="muted">Credit note</p>

@@ -8,15 +8,15 @@ import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-seri
 export default async function SettingsPage({
   searchParams
 }: {
-  searchParams?: Promise<{ error?: string }>;
+  searchParams?: Promise<Record<string, string | undefined>>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const context = await getTenantContextForUser(user.id);
-  if (!context) redirect("/register");
+  if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
 
-  const query = await searchParams;
+  await searchParams;
   const { organisation, settings, companies, bankAccounts, lockedPeriods, series, creditNoteSeries } =
     await getSettingsWorkspace(context);
   const previewDate = new Date();
@@ -29,7 +29,6 @@ export default async function SettingsPage({
           <h1>Settings</h1>
         </div>
       </header>
-      {query?.error ? <p className="notice error">{query.error}</p> : null}
       <div className="grid two-column">
         <div className="stack">
           <section className="panel">

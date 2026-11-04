@@ -1,19 +1,24 @@
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { getPaymentEntryData, listPayments } from "@/lib/payments/payment-service";
+import { hasPermission } from "@/lib/permissions/roles";
+import { todayIso } from "@/lib/dates";
 
-export default async function PaymentsPage({ searchParams }: { searchParams?: Promise<{ error?: string }> }) {
+export default async function PaymentsPage({ searchParams }: { searchParams?: Promise<{ invoiceId?: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const context = await getTenantContextForUser(user.id);
-  if (!context) redirect("/register");
+  if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
 
   const query = await searchParams;
-  const { invoices, bankAccounts } = await getPaymentEntryData(context);
+  const canManage = hasPermission(context.role, "payments:manage");
+  const { invoices, bankAccounts } = canManage ? await getPaymentEntryData(context) : { invoices: [], bankAccounts: [] };
+  const selectedInvoice = invoices.find((invoice) => invoice.id === query?.invoiceId) ?? invoices[0];
   const payments = await listPayments(context);
 
   return (
@@ -26,7 +31,6 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
       </header>
       <div className="grid two-column">
         <section className="panel">
-          {query?.error ? <p className="notice error">{query.error}</p> : null}
           <div className="section-title">
             <div>
               <p className="muted">Receipts</p>
@@ -53,13 +57,22 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
                         <td>{payment.currency} {payment.amount.toString()}</td>
                         <td><span className="badge">{payment.status}</span></td>
                         <td>
-                          {payment.status === "posted" ? (
-                            <form className="inline-form" action="/api/payments/reverse" method="post">
-                              <input type="hidden" name="paymentId" value={payment.id} />
-                              <input type="hidden" name="reason" value="Reversed from payments screen" />
-                              <button className="button subtle" type="submit">Reverse</button>
-                            </form>
-                          ) : "-"}
+                          {payment.status === "posted" && canManage ? (
+                            <details className="details compact">
+                              <summary>Reverse</summary>
+                              <form className="form compact-form" action="/api/payments/reverse" method="post">
+                                <input type="hidden" name="paymentId" value={payment.id} />
+                                <div className="field">
+                                  <label htmlFor={`reason-${payment.id}`}>Reason for reversal</label>
+                                  <textarea id={`reason-${payment.id}`} name="reason" required minLength={3} />
+                                </div>
+                                <label className="checkbox">
+                                  <input type="checkbox" name="confirm" required /> I understand this reopens the invoice balance
+                                </label>
+                                <button className="button danger" type="submit">Reverse payment</button>
+                              </form>
+                            </details>
+                          ) : payment.status === "reversed" ? (payment.reversalReason || "-") : "-"}
                         </td>
                       </tr>
                     );
@@ -77,13 +90,16 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
               <h2>Record payment</h2>
             </div>
           </div>
-          {invoices.length === 0 ? (
+          {!canManage ? (
+            <div className="empty-state">Your role can view payments but not record them.</div>
+          ) : invoices.length === 0 ? (
             <div className="empty-state">No issued invoices with outstanding balance.</div>
           ) : (
             <form className="form" action="/api/payments" method="post">
+              <input type="hidden" name="idempotencyKey" value={randomUUID()} />
               <div className="field">
                 <label htmlFor="invoiceId">Invoice</label>
-                <select id="invoiceId" name="invoiceId" required>
+                <select id="invoiceId" name="invoiceId" required defaultValue={selectedInvoice?.id}>
                   {invoices.map((invoice) => (
                     <option key={invoice.id} value={invoice.id}>
                       {invoice.invoiceNumber || invoice.id} - {invoice.buyer?.displayName || "No buyer"} - Balance {invoice.currency} {invoice.balanceDue.toString()}
@@ -94,11 +110,11 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
               <div className="form-grid">
                 <div className="field">
                   <label htmlFor="paymentDate">Payment date</label>
-                  <input id="paymentDate" name="paymentDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required />
+                  <input id="paymentDate" name="paymentDate" type="date" defaultValue={todayIso()} required />
                 </div>
                 <div className="field">
                   <label htmlFor="currency">Currency</label>
-                  <input id="currency" name="currency" defaultValue="INR" required maxLength={3} />
+                  <input id="currency" name="currency" defaultValue={selectedInvoice?.currency || "INR"} required maxLength={3} />
                 </div>
               </div>
               <div className="field">
