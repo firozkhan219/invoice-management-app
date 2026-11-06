@@ -41,6 +41,7 @@ export default async function DashboardPage() {
           <div className="toolbar">
             <Link className="button" href="/invoices/new">New invoice</Link>
             <Link className="button subtle" href="/packing-lists">New packing list</Link>
+            <Link className="button subtle" href="/catalogue">Make catalogue</Link>
           </div>
         </header>
 
@@ -159,14 +160,14 @@ export default async function DashboardPage() {
             <div className="kpi-row">
               <div>
                 <p className="muted">Setup</p>
-                <h2>Master data</h2>
+                <h2>Saved records</h2>
               </div>
               <span className="kpi-icon"><Building2 size={18} /></span>
             </div>
             <ul className="insight-list top-space">
               <li><span>Companies</span><strong>{summary.companyCount}</strong></li>
               <li><span>Buyers</span><strong>{summary.buyerCount}</strong></li>
-              <li><span>Items</span><strong>{summary.itemCount}</strong></li>
+              <li><span>Products</span><strong>{summary.itemCount}</strong></li>
             </ul>
           </div>
           <div className="panel">

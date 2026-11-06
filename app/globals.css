@@ -2200,3 +2200,69 @@ h3 { font-weight: 600; }
 .sidebar-org-switch select {
   width: 100%;
 }
+
+/* ---------- Catalogue builder ---------- */
+.catalogue-builder { display: grid; gap: 18px; }
+.catalogue-step { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.catalogue-step > span {
+  flex: none; width: 30px; height: 30px; border-radius: 999px; background: #0f766e; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 700;
+}
+.catalogue-step h2 { margin: 2px 0 2px; }
+.catalogue-step p { margin: 0; }
+.catalogue-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.catalogue-filters input[type="search"] { flex: 1 1 220px; }
+.catalogue-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.catalogue-card {
+  position: relative; display: grid; gap: 4px; padding: 8px; border: 1px solid #e2e8f0; border-radius: 10px;
+  cursor: pointer; background: #fff; font-size: 13px;
+}
+.catalogue-card input { position: absolute; top: 10px; left: 10px; width: 18px; height: 18px; }
+.catalogue-card.selected { border-color: #0f766e; box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.25); }
+.catalogue-thumb {
+  display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; background: #f8fafc;
+  border-radius: 8px; overflow: hidden; font-size: 12px;
+}
+.catalogue-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.catalogue-order {
+  position: absolute; top: 8px; right: 8px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+  background: #0f766e; color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
+.catalogue-layouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.catalogue-layout {
+  display: grid; gap: 6px; justify-items: center; text-align: center; padding: 14px; border: 1px solid #e2e8f0;
+  border-radius: 10px; cursor: pointer; background: #fff;
+}
+.catalogue-layout input { position: absolute; opacity: 0; pointer-events: none; }
+.catalogue-layout.selected { border-color: #0f766e; box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.25); }
+.layout-preview { display: grid; gap: 4px; width: 60px; height: 84px; padding: 5px; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; }
+.layout-preview i { display: block; background: #ccfbf1; border-radius: 2px; }
+.layout-preview.per-1 { grid-template-rows: 1fr; }
+.layout-preview.per-2 { grid-template-rows: 1fr 1fr; }
+.layout-preview.per-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.catalogue-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.catalogue-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; }
+.catalogue-summary .button { margin-left: auto; }
+@media (max-width: 640px) {
+  .catalogue-summary .button { margin-left: 0; width: 100%; }
+}
+
+/* ---------- Quick invoice ---------- */
+.quick-invoice { display: grid; gap: 18px; }
+.quick-invoice h2 { margin-top: 0; }
+.quick-lines { display: grid; gap: 10px; margin-bottom: 12px; }
+.quick-line { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1.2fr) 32px; gap: 8px; align-items: start; }
+.quick-line input, .quick-line select { width: 100%; min-width: 0; }
+.quick-line-head { font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.03em; }
+.quick-product { display: grid; gap: 6px; }
+.quick-amount { padding-top: 10px; text-align: right; }
+.quick-totals { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 18px; margin-top: 14px; }
+.quick-grand { font-size: 17px; }
+.quick-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 1100px) {
+  .quick-line-head { display: none; }
+  .quick-line { grid-template-columns: 1fr 1fr 1fr; padding: 10px; border: 1px solid #e2e8f0; border-radius: 10px; }
+  .quick-product { grid-column: 1 / -1; }
+  .quick-amount { text-align: left; }
+  .quick-actions .button { flex: 1; }
+}

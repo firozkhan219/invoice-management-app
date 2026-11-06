@@ -84,7 +84,7 @@ export default async function ItemsPage({
         <main className="exports-main">
           <header className="exports-topbar">
             <div>
-              <h1>Items Catalog ({items.length})</h1>
+              <h1>Products ({items.length})</h1>
               <p className="muted">Images, item codes, categories, prices, weights, barcodes, and export document readiness.</p>
             </div>
             <div className="item-toolbar">

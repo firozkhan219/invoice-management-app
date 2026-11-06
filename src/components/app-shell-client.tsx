@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   Settings,
   Plus,
+  BookImage,
   ChevronRight,
   ShieldCheck,
   UserRound,
@@ -25,19 +26,21 @@ import {
 import { FlashMessage } from "@/components/flash-message";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+// Daily work first, then saved records, then everything used rarely.
 const navItems = [
-  { label: "Dashboard", href: "/dashboard", icon: Gauge },
-  { label: "Invoices", href: "/invoices", icon: FileText },
-  { label: "Credit Notes", href: "/credit-notes", icon: FileMinus2 },
-  { label: "Packing Lists", href: "/packing-lists", icon: PackageCheck },
-  { label: "Payments", href: "/payments", icon: CreditCard },
-  { label: "Buyers", href: "/buyers", icon: Users },
-  { label: "Items", href: "/items", icon: Package },
-  { label: "Companies", href: "/companies", icon: Building2 },
-  { label: "Reports", href: "/reports", icon: FileBarChart },
-  { label: "Users & Roles", href: "/members", icon: ShieldCheck },
-  { label: "Settings", href: "/settings", icon: Settings },
-  { label: "My account", href: "/account", icon: UserRound }
+  { label: "Home", href: "/dashboard", icon: Gauge, group: "Daily work" },
+  { label: "Invoices", href: "/invoices", icon: FileText, group: "Daily work" },
+  { label: "Packing Lists", href: "/packing-lists", icon: PackageCheck, group: "Daily work" },
+  { label: "Catalogue", href: "/catalogue", icon: BookImage, group: "Daily work" },
+  { label: "Payments", href: "/payments", icon: CreditCard, group: "Daily work" },
+  { label: "Products", href: "/items", icon: Package, group: "Saved records" },
+  { label: "Buyers", href: "/buyers", icon: Users, group: "Saved records" },
+  { label: "My Company", href: "/companies", icon: Building2, group: "Saved records" },
+  { label: "Credit Notes", href: "/credit-notes", icon: FileMinus2, group: "More" },
+  { label: "Reports", href: "/reports", icon: FileBarChart, group: "More" },
+  { label: "Users & Roles", href: "/members", icon: ShieldCheck, group: "More" },
+  { label: "Settings", href: "/settings", icon: Settings, group: "More" },
+  { label: "My account", href: "/account", icon: UserRound, group: "More" }
 ];
 
 export type ShellAccount = {
@@ -140,7 +143,7 @@ export function AppShellClient({ children, account }: { children: React.ReactNod
 
             return (
               <div key={item.label}>
-              {(index === 0 || index === 5 || index === 8) && <p className="nav-group sidebar-label">{index === 0 ? "Workspace" : index === 5 ? "Business records" : "Manage"}</p>}
+              {(index === 0 || navItems[index - 1].group !== item.group) && <p className="nav-group sidebar-label">{item.group}</p>}
               <Link onClick={() => setMobilePath(null)} aria-current={active ? "page" : undefined} className={active ? "active" : undefined} href={item.href} title={item.label}>
                 <Icon size={18} />
                 <span className="sidebar-label">{item.label}</span>

@@ -29,7 +29,7 @@ export default async function BuyersPage() {
     <AppShell>
       <header className="page-header">
         <div>
-          <p className="muted">Master data</p>
+          <p className="muted">Saved records</p>
           <h1>Buyers</h1>
         </div>
       </header>
