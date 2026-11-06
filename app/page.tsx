@@ -4,14 +4,14 @@ export default function HomePage() {
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <p className="muted">Business invoicing</p>
-        <h1>Invoice Management</h1>
+        <div className="auth-brand"><span className="brand-mark">IM</span><span>Invoice Management</span></div>
+        <h1>Less paperwork.<br />More business.</h1>
         <p className="muted">
-          Sign in or create your organisation to manage invoices, buyers, payments, and reports.
+          Create professional invoices and packing lists in one organised workspace. Save your buyers and products, track payments, and download ready-to-share PDFs.
         </p>
         <div className="grid">
           <Link className="button" href="/register">
-            Create account
+            Create your workspace
           </Link>
           <Link href="/login">Sign in</Link>
         </div>
