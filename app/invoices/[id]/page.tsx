@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Ban, CreditCard, FileClock, FileText, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, Ban, CheckCircle2, CreditCard, FileClock, FileText, PackageCheck, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
@@ -36,10 +36,22 @@ export default async function InvoiceEditorPage({
   const canOpenPdf = ["issued", "partially_paid", "paid"].includes(invoice.status);
   const canRecordPayment = mayManagePayments && ["issued", "partially_paid"].includes(invoice.status) && invoice.balanceDue.gt(0);
   const canCreateCreditNote = mayCreate && ["issued", "partially_paid", "paid"].includes(invoice.status);
+  const canCreatePackingList = canCreateCreditNote;
+  const issuedPackingLists = invoice.packingLists.filter((packingList) => packingList.status === "issued");
+  const draftPackingLists = invoice.packingLists.filter((packingList) => packingList.status === "draft");
+  const issuedCreditNotes = invoice.creditNotes.filter((creditNote) => creditNote.status === "issued");
   const canCancel = mayCancel && invoice.status === "issued" && invoice.paidTotal.lte(0) && invoice.creditedTotal.lte(0);
   const canIssue = Boolean(mayIssue && invoice.companyId && invoice.buyerId && invoice.items.length > 0 && invoice.grandTotal.gt(0) && seriesList.length > 0);
   const paymentHref = `/payments?invoiceId=${invoice.id}`;
   const statusLabel = invoice.status.replace("_", " ");
+  const readiness = invoiceReadiness({
+    hasCompany: Boolean(invoice.companyId),
+    hasBuyer: Boolean(invoice.buyerId),
+    hasItems: invoice.items.length > 0,
+    hasPositiveTotal: invoice.grandTotal.gt(0),
+    hasSeries: seriesList.length > 0,
+    hasExportFields: Boolean(invoice.portOfLoading && invoice.portOfDischarge && invoice.finalDestination)
+  });
   const issueRequirements = [
     ...draftIssueRequirements({
       status: invoice.status,
@@ -100,6 +112,55 @@ export default async function InvoiceEditorPage({
           <strong>{invoice.currency} {invoice.balanceDue.toString()}</strong>
         </div>
       </div>
+
+      <section className="document-command-panel">
+        <div>
+          <p className="muted">Production readiness</p>
+          <h2>{readiness.ready} of {readiness.total} checks complete</h2>
+        </div>
+        <div className="readiness-list">
+          {readiness.items.map((item) => (
+            <span className={item.done ? "ready-check done" : "ready-check"} key={item.label}>
+              {item.done ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+              {item.label}
+            </span>
+          ))}
+        </div>
+        <div className="document-link-grid">
+          {canOpenPdf ? (
+            <a className="document-link-card primary" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer">
+              <FileText size={18} />
+              <span><strong>Invoice PDF</strong><small>Commercial invoice output</small></span>
+            </a>
+          ) : (
+            <span className="document-link-card disabled">
+              <FileText size={18} />
+              <span><strong>Invoice PDF</strong><small>Available after issue</small></span>
+            </span>
+          )}
+          {issuedPackingLists.length > 0 ? issuedPackingLists.map((packingList) => (
+            <a className="document-link-card" href={`/api/packing-lists/${packingList.id}/pdf`} target="_blank" rel="noreferrer" key={packingList.id}>
+              <PackageCheck size={18} />
+              <span><strong>Packing List</strong><small>{packingList.packingListNumber || "Issued document"}</small></span>
+            </a>
+          )) : canCreatePackingList ? (
+            <form className="document-link-form" action="/api/packing-lists" method="post">
+              <input type="hidden" name="invoiceId" value={invoice.id} />
+              <input type="hidden" name="packingListDate" value={new Date().toISOString().slice(0, 10)} />
+              <button className="document-link-card" type="submit">
+                <PackageCheck size={18} />
+                <span><strong>Create Packing List</strong><small>Copy from this invoice</small></span>
+              </button>
+            </form>
+          ) : null}
+          {issuedCreditNotes.map((creditNote) => (
+            <a className="document-link-card" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer" key={creditNote.id}>
+              <Undo2 size={18} />
+              <span><strong>Credit Note</strong><small>{creditNote.creditNoteNumber || "Issued correction"}</small></span>
+            </a>
+          ))}
+        </div>
+      </section>
 
       <div className="grid two-column">
         <div className="grid">
@@ -366,7 +427,7 @@ export default async function InvoiceEditorPage({
             <section className="panel">
               <div className="section-title">
                 <div>
-                  <p className="muted">Output</p>
+                  <p className="muted">Export output</p>
                   <h2>Documents</h2>
                 </div>
                 <FileText size={20} />
@@ -374,15 +435,53 @@ export default async function InvoiceEditorPage({
               <div className="action-stack">
                 <a className="button" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer">
                   <FileText size={18} />
-                  Open PDF
+                  Invoice PDF
                 </a>
-                {canRecordPayment ? (
-                  <Link className="button subtle" href={paymentHref}>
-                    <CreditCard size={18} />
-                    Record payment
+                {issuedPackingLists.map((packingList) => (
+                  <a key={packingList.id} className="button subtle" href={`/api/packing-lists/${packingList.id}/pdf`} target="_blank" rel="noreferrer">
+                    <PackageCheck size={18} />
+                    Packing list {packingList.packingListNumber || ""}
+                  </a>
+                ))}
+                {mayCreate ? draftPackingLists.map((packingList) => (
+                  <Link key={packingList.id} className="button subtle" href={`/packing-lists/${packingList.id}`}>
+                    <PackageCheck size={18} />
+                    Continue packing draft
                   </Link>
+                )) : null}
+                {issuedCreditNotes.map((creditNote) => (
+                  <a key={creditNote.id} className="button subtle" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer">
+                    <Undo2 size={18} />
+                    Credit note {creditNote.creditNoteNumber || ""}
+                  </a>
+                ))}
+                {canCreatePackingList ? (
+                  <form className="form" action="/api/packing-lists" method="post">
+                    <input type="hidden" name="invoiceId" value={invoice.id} />
+                    <input type="hidden" name="packingListDate" value={new Date().toISOString().slice(0, 10)} />
+                    <button className="button subtle" type="submit">
+                      <PackageCheck size={18} />
+                      Create packing list
+                    </button>
+                  </form>
                 ) : null}
               </div>
+            </section>
+          ) : null}
+
+          {canRecordPayment ? (
+            <section className="panel">
+              <div className="section-title">
+                <div>
+                  <p className="muted">Payment</p>
+                  <h2>Receivable</h2>
+                </div>
+                <CreditCard size={20} />
+              </div>
+              <Link className="button subtle" href={paymentHref}>
+                <CreditCard size={18} />
+                Record payment
+              </Link>
             </section>
           ) : null}
 
@@ -561,4 +660,28 @@ function previewInvoiceNumber(
     date: invoiceDate,
     financialYearStartMonth
   });
+}
+
+function invoiceReadiness(input: {
+  hasCompany: boolean;
+  hasBuyer: boolean;
+  hasItems: boolean;
+  hasPositiveTotal: boolean;
+  hasSeries: boolean;
+  hasExportFields: boolean;
+}) {
+  const items = [
+    { label: "Company", done: input.hasCompany },
+    { label: "Buyer", done: input.hasBuyer },
+    { label: "Line items", done: input.hasItems },
+    { label: "Amount", done: input.hasPositiveTotal },
+    { label: "Number series", done: input.hasSeries },
+    { label: "Export fields", done: input.hasExportFields }
+  ];
+
+  return {
+    items,
+    ready: items.filter((item) => item.done).length,
+    total: items.length
+  };
 }

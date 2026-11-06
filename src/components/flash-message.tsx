@@ -11,7 +11,7 @@ function FlashInner() {
   return (
     <>
       {error ? <p className="notice error" role="alert">{error}</p> : null}
-      {notice ? <p className="notice" role="status">{notice}</p> : null}
+      {notice ? <p className="notice success" role="status">{notice}</p> : null}
     </>
   );
 }

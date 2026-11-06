@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/db/prisma";
 import { accountLast4, maskAccountNumber, normaliseAccountNumber } from "@/lib/companies/bank-account";
+import { writePrivateDocument } from "@/lib/documents/document-storage";
+import { prepareFileAsset, type FileAssetKind } from "@/lib/files/file-assets";
 import { encryptSensitiveText } from "@/lib/security/encryption";
 import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
-import { storeCompanyImage } from "@/lib/files/file-assets";
 import type {
   BankAccountInput,
   BankAccountUpdateInput,
@@ -19,6 +20,8 @@ export async function listCompanies(context: TenantContext) {
   const companies = await prisma.company.findMany({
     where: { organisationId: tenant.organisationId },
     include: {
+      logoAsset: true,
+      signatureAsset: true,
       bankAccounts: {
         orderBy: [{ isActive: "desc" }, { isDefault: "desc" }, { createdAt: "asc" }]
       }
@@ -33,6 +36,59 @@ export async function listCompanies(context: TenantContext) {
       maskedAccountNumber: maskAccountNumber(account.accountNumberLast4)
     }))
   }));
+}
+
+export async function uploadCompanyBrandAsset(
+  context: TenantContext,
+  input: { companyId: string; kind: FileAssetKind; file: File }
+) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "masters:manage");
+
+  const prepared = await prepareFileAsset(context, input.file, input.kind);
+  const stored = await writePrivateDocument(prepared.storageKey, prepared.data);
+
+  return prisma.$transaction(async (tx) => {
+    const company = await tx.company.findFirst({
+      where: { id: input.companyId, organisationId: tenant.organisationId }
+    });
+
+    if (!company) {
+      throw new Error("Company not found.");
+    }
+
+    const asset = await tx.fileAsset.create({
+      data: {
+        organisationId: prepared.organisationId,
+        kind: prepared.kind,
+        originalName: prepared.originalName,
+        storageKey: prepared.storageKey,
+        mimeType: prepared.mimeType,
+        byteSize: stored.byteSize,
+        checksumSha256: stored.checksumSha256
+      }
+    });
+
+    const updated = await tx.company.update({
+      where: { id: company.id },
+      data: input.kind === "company_logo"
+        ? { logoAssetId: asset.id }
+        : { signatureAssetId: asset.id }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: `${input.kind}.upload`,
+        entityType: "company",
+        entityId: company.id,
+        metadata: { assetId: asset.id, originalName: asset.originalName }
+      }
+    });
+
+    return updated;
+  });
 }
 
 export async function createCompany(context: TenantContext, input: CompanyInput) {
@@ -163,8 +219,7 @@ function nulls(keys: readonly string[]): Record<string, null> {
 export async function updateCompany(
   context: TenantContext,
   input: CompanyUpdateInput,
-  clear: readonly string[] = [],
-  images: { logo?: File; signature?: File } = {}
+  clear: readonly string[] = []
 ) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "masters:manage");
@@ -173,10 +228,6 @@ export async function updateCompany(
     where: { id: input.companyId, organisationId: tenant.organisationId }
   });
   if (!current) throw new Error("Company not found.");
-
-  // Files are written before the transaction; an orphaned file after a later failure is harmless.
-  const logo = images.logo ? await storeCompanyImage(tenant, images.logo, "company_logo") : null;
-  const signature = images.signature ? await storeCompanyImage(tenant, images.signature, "company_signature") : null;
 
   return prisma.$transaction(async (tx) => {
     const { companyId, ...fields } = input;
@@ -193,9 +244,7 @@ export async function updateCompany(
       data: {
         ...fields,
         ...nulls(clear),
-        isDefault: fields.isDefault && current.isActive,
-        ...(logo ? { logoAssetId: logo.id } : {}),
-        ...(signature ? { signatureAssetId: signature.id } : {})
+        isDefault: fields.isDefault && current.isActive
       }
     });
 
@@ -205,36 +254,11 @@ export async function updateCompany(
         actorUserId: tenant.userId,
         action: "company.update",
         entityType: "company",
-        entityId: company.id,
-        metadata: { logoUpdated: Boolean(logo), signatureUpdated: Boolean(signature) }
+        entityId: company.id
       }
     });
 
     return company;
-  });
-}
-
-export async function removeCompanyImage(context: TenantContext, companyId: string, kind: "logo" | "signature") {
-  const tenant = requireTenantContext(context);
-  assertPermission(tenant.role, "masters:manage");
-
-  return prisma.$transaction(async (tx) => {
-    const company = await tx.company.findFirst({ where: { id: companyId, organisationId: tenant.organisationId } });
-    if (!company) throw new Error("Company not found.");
-    const updated = await tx.company.update({
-      where: { id: company.id },
-      data: kind === "logo" ? { logoAssetId: null } : { signatureAssetId: null }
-    });
-    await tx.auditLog.create({
-      data: {
-        organisationId: tenant.organisationId,
-        actorUserId: tenant.userId,
-        action: kind === "logo" ? "company.logo_remove" : "company.signature_remove",
-        entityType: "company",
-        entityId: company.id
-      }
-    });
-    return updated;
   });
 }
 

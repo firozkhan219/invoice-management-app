@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  output: "standalone", experimental: { cpus: 2 },
   poweredByHeader: false,
   allowedDevOrigins: ["127.0.0.1"],
   serverExternalPackages: ["pdfkit"],

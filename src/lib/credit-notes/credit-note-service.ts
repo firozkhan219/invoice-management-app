@@ -493,8 +493,8 @@ export async function generateCreditNotePdf(context: TenantContext, creditNoteId
     import("@/lib/documents/document-storage")
   ]);
   const pdfData = buildCreditNotePdfData(creditNote);
-  const { loadCompanyImages } = await import("@/lib/files/company-images");
-  const images = await loadCompanyImages(tenant.organisationId, pdfData.company);
+  const { loadCompanyPdfAssets } = await import("@/lib/invoices/invoice-service");
+  const images = await loadCompanyPdfAssets(tenant.organisationId, creditNote.originalInvoice.companyId);
   const buffer = await renderInvoicePdf({ ...pdfData, ...images });
   const stored = await writePrivateDocument(
     creditNotePdfStorageKey(tenant.organisationId, creditNote.id),
