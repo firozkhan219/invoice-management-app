@@ -8,6 +8,12 @@ import { slugifyOrganisationName } from "@/lib/organisations/slug";
  * Public sign-up is closed unless ALLOW_REGISTRATION=true, except for the very first
  * account on a fresh install (which becomes the owner). Others are added from Users & Roles.
  */
+export class RegistrationClosedError extends Error {
+  constructor() {
+    super("Registration is closed. Ask an owner or admin to add you from Users & Roles.");
+  }
+}
+
 export async function isRegistrationOpen(): Promise<boolean> {
   if (process.env.ALLOW_REGISTRATION === "true") return true;
   return (await prisma.user.count()) === 0;
@@ -15,7 +21,7 @@ export async function isRegistrationOpen(): Promise<boolean> {
 
 export async function registerUser(input: RegisterInput) {
   if (!(await isRegistrationOpen())) {
-    throw new Error("Registration is closed. Ask an owner or admin to add you from Users & Roles.");
+    throw new RegistrationClosedError();
   }
   const passwordHash = await hashPassword(input.password);
 
