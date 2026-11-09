@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { AlertTriangle, ArrowLeft, CheckCircle2, Download, FileText, PackagePlus, Save, Search, Send, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, Download, PackagePlus, Save, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
-import { getPackingList, getPackingListWorkspace, listPackingLists, packingListIssueRequirements } from "@/lib/packing-lists/packing-list-service";
+import { getPackingList, getPackingListWorkspace, packingListIssueRequirements, shipmentNeedsPorts } from "@/lib/packing-lists/packing-list-service";
 
 export default async function PackingListDetailPage({
   params
@@ -18,10 +18,9 @@ export default async function PackingListDetailPage({
   if (!context) redirect("/register");
 
   const { id } = await params;
-  const [packingList, workspace, packingLists] = await Promise.all([
+  const [packingList, workspace] = await Promise.all([
     getPackingList(context, id),
-    getPackingListWorkspace(context),
-    listPackingLists(context)
+    getPackingListWorkspace(context)
   ]);
 
   if (!packingList) notFound();
@@ -34,40 +33,13 @@ export default async function PackingListDetailPage({
     hasBuyer: Boolean(packingList.buyerId),
     hasLines: packingList.lines.length > 0,
     hasShipmentMode: Boolean(packingList.shipmentMode),
-    hasRoute: Boolean(packingList.portOfLoading && packingList.portOfDischarge && packingList.finalDestination),
+    hasRoute: Boolean(packingList.finalDestination && (!shipmentNeedsPorts(packingList.shipmentMode) || (packingList.portOfLoading && packingList.portOfDischarge))),
     hasWeights: packingList.totalGrossWeightKg.gt(0) && packingList.totalNetWeightKg.gt(0)
   });
 
   return (
     <AppShell>
-      <div className="export-workspace">
-        <ExportDocumentNav />
-
-        <aside className="export-list-rail">
-          <div className="rail-header">
-            <div>
-              <h2>Packing Lists</h2>
-              <p className="muted">{packingLists.length} documents</p>
-            </div>
-          </div>
-          <form className="rail-search" action="/packing-lists" method="get">
-            <Search size={16} />
-            <input name="q" placeholder="Search packing lists..." />
-          </form>
-          <div className="document-list">
-            {packingLists.map((item) => (
-              <Link className={`document-list-item ${item.id === packingList.id ? "active" : ""}`} href={`/packing-lists/${item.id}`} key={item.id}>
-                <span>
-                  <strong>{item.buyer?.displayName || "No buyer"}</strong>
-                  <small>{item.packingListNumber || "Draft packing list"}</small>
-                  <small>{item.packingListDate.toISOString().slice(0, 10)}</small>
-                </span>
-                <span className={`status-badge ${item.status}`}>{item.status}</span>
-              </Link>
-            ))}
-          </div>
-        </aside>
-
+      <div className="packing-detail">
         <main className="document-editor">
           <div className="document-toolbar">
             <div className="document-crumb">
@@ -78,18 +50,18 @@ export default async function PackingListDetailPage({
             <div className="toolbar">
               <Link className="button subtle tiny" href="/packing-lists">
                 <ArrowLeft size={16} />
-                Back to List
+                All packing lists
               </Link>
               {canEdit ? (
                 <button className="button tiny" form="packing-list-draft-form" type="submit">
                   <Save size={16} />
-                  Save Draft
+                  Save changes
                 </button>
               ) : null}
               {packingList.status === "issued" ? (
                 <a className="button tiny" href={`/api/packing-lists/${packingList.id}/pdf`} target="_blank" rel="noreferrer">
                   <Download size={16} />
-                  PDF
+                  Download PDF
                 </a>
               ) : null}
             </div>
@@ -103,8 +75,8 @@ export default async function PackingListDetailPage({
 
             <div className="document-command-panel compact">
               <div>
-                <p className="muted">Shipment readiness</p>
-                <h2>{readiness.ready} of {readiness.total} checks complete</h2>
+                <p className="muted">{packingList.status === "issued" ? "Finalised" : "Before you finalise"}</p>
+                <h2>{readiness.ready === readiness.total ? "All details complete" : `${readiness.ready} of ${readiness.total} details complete`}</h2>
               </div>
               <div className="readiness-list">
                 {readiness.items.map((item) => (
@@ -136,21 +108,23 @@ export default async function PackingListDetailPage({
 
             {canEdit && issueRequirements.length > 0 ? (
               <div className="notice error top-space">
-                <strong>Before issuing</strong>
+                <strong>Still needed</strong>
                 <span>{issueRequirements.join(", ")}.</span>
               </div>
             ) : null}
 
+            {canEdit ? (
             <div className="document-action-row">
               <form action="/api/packing-lists/issue" method="post">
                 <input type="hidden" name="packingListId" value={packingList.id} />
                 <input type="hidden" name="expectedVersion" value={packingList.version} />
                 <button className="button" type="submit" disabled={!canIssue}>
                   <Send size={18} />
-                  Issue packing list
+                  Finalise &amp; make PDF
                 </button>
               </form>
             </div>
+            ) : null}
 
             <section className="document-lines">
               <div className="document-section-heading">
@@ -379,20 +353,6 @@ function PackingListSnapshot({
   );
 }
 
-function ExportDocumentNav() {
-  return (
-    <aside className="export-doc-nav">
-      <div className="rail-header">
-        <h2>Export Documents</h2>
-      </div>
-      <nav>
-        <Link href="/invoices"><FileText size={16} /><span>Commercial Invoices<small>Final export invoices</small></span></Link>
-        <Link className="active" href="/packing-lists"><PackagePlus size={16} /><span>Packing Lists<small>Export package contents</small></span></Link>
-      </nav>
-    </aside>
-  );
-}
-
 function packingListReadiness(input: {
   hasCompany: boolean;
   hasBuyer: boolean;
@@ -406,7 +366,7 @@ function packingListReadiness(input: {
     { label: "Buyer", done: input.hasBuyer },
     { label: "Package lines", done: input.hasLines },
     { label: "Shipment mode", done: input.hasShipmentMode },
-    { label: "Route", done: input.hasRoute },
+    { label: "Destination", done: input.hasRoute },
     { label: "Weights", done: input.hasWeights }
   ];
 

@@ -40,7 +40,7 @@ export default async function DashboardPage() {
           </div>
           <div className="toolbar">
             <Link className="button" href="/invoices/new">New invoice</Link>
-            <Link className="button subtle" href="/packing-lists">New packing list</Link>
+            <Link className="button subtle" href="/packing-lists/new">New packing list</Link>
             <Link className="button subtle" href="/catalogue">Make catalogue</Link>
           </div>
         </header>

@@ -7,7 +7,8 @@ import type {
   PackingListDraftInput,
   PackingListIssueInput,
   PackingListLineDeleteInput,
-  PackingListLineInput
+  PackingListLineInput,
+  QuickPackingLineInput
 } from "@/lib/validation/packing-lists";
 
 type InvoiceWithPackingSourceLines = Prisma.InvoiceGetPayload<{
@@ -167,6 +168,132 @@ export async function createPackingListDraft(context: TenantContext, input: Pack
         entityType: "packing_list",
         entityId: saved.id,
         metadata: { invoiceId: invoice?.id || null }
+      }
+    });
+
+    return saved;
+  });
+}
+
+/** Data for the one-page packing list form: issued invoices with their lines and product weights. */
+export async function getQuickPackingData(context: TenantContext) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+
+  const [invoices, companies, buyers, items] = await Promise.all([
+    prisma.invoice.findMany({
+      where: { organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] } },
+      include: {
+        buyer: { select: { displayName: true } },
+        items: { include: { item: { select: { weightKg: true } } }, orderBy: { sortOrder: "asc" } }
+      },
+      orderBy: [{ invoiceDate: "desc" }, { createdAt: "desc" }],
+      take: 50
+    }),
+    prisma.company.findMany({ where: { organisationId: tenant.organisationId, isActive: true }, orderBy: { legalName: "asc" } }),
+    prisma.buyer.findMany({ where: { organisationId: tenant.organisationId, isActive: true }, orderBy: { displayName: "asc" } }),
+    prisma.item.findMany({
+      where: { organisationId: tenant.organisationId, isActive: true },
+      include: { unit: { select: { code: true } } },
+      orderBy: { name: "asc" }
+    })
+  ]);
+
+  return { invoices, companies, buyers, items };
+}
+
+/**
+ * Creates a draft packing list with all its box lines in one transaction.
+ * Lines come from the form (already edited by the user), so invoice lines are not auto-copied here.
+ */
+export async function createQuickPackingList(
+  context: TenantContext,
+  input: PackingListDraftInput,
+  lines: QuickPackingLineInput[]
+) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+  if (lines.length === 0) throw new Error("Add at least one box line.");
+
+  return prisma.$transaction(async (tx) => {
+    let invoice: { id: string; companyId: string | null; buyerId: string | null; consigneeBuyerId: string | null } | null = null;
+    if (input.invoiceId) {
+      invoice = await tx.invoice.findFirst({
+        where: { id: input.invoiceId, organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] } },
+        select: { id: true, companyId: true, buyerId: true, consigneeBuyerId: true }
+      });
+      if (!invoice) throw new Error("Issued invoice not found.");
+    }
+
+    await validateMasterRefs(tx, tenant.organisationId, input);
+
+    const itemIds = [...new Set(lines.map((line) => line.itemId).filter((id): id is string => Boolean(id)))];
+    if (itemIds.length) {
+      const count = await tx.item.count({ where: { id: { in: itemIds }, organisationId: tenant.organisationId } });
+      if (count !== itemIds.length) throw new Error("A product on this packing list was not found.");
+    }
+    const invoiceItemIds = [...new Set(lines.map((line) => line.invoiceItemId).filter((id): id is string => Boolean(id)))];
+    if (invoiceItemIds.length) {
+      if (!invoice) throw new Error("Invoice lines need a source invoice.");
+      const count = await tx.invoiceItem.count({
+        where: { id: { in: invoiceItemIds }, organisationId: tenant.organisationId, invoiceId: invoice.id }
+      });
+      if (count !== invoiceItemIds.length) throw new Error("An invoice line on this packing list was not found.");
+    }
+
+    const packingList = await tx.packingList.create({
+      data: {
+        organisationId: tenant.organisationId,
+        invoiceId: invoice?.id,
+        companyId: input.companyId || invoice?.companyId,
+        buyerId: input.buyerId || invoice?.buyerId,
+        consigneeBuyerId: input.consigneeBuyerId || invoice?.consigneeBuyerId,
+        packingListDate: input.packingListDate,
+        exportReference: input.exportReference,
+        containerNumber: input.containerNumber,
+        sealNumber: input.sealNumber,
+        shipmentMode: input.shipmentMode,
+        portOfLoading: input.portOfLoading,
+        portOfDischarge: input.portOfDischarge,
+        finalDestination: input.finalDestination,
+        notes: input.notes,
+        createdById: tenant.userId
+      }
+    });
+
+    await tx.packingListLine.createMany({
+      data: lines.map((line, index) => ({
+        organisationId: tenant.organisationId,
+        packingListId: packingList.id,
+        itemId: line.itemId,
+        invoiceItemId: line.invoiceItemId,
+        sortOrder: index + 1,
+        packageNo: line.packageNo,
+        marksAndNumbers: line.marksAndNumbers,
+        sku: line.sku,
+        description: line.description,
+        hsnSac: line.hsnSac,
+        quantity: new Prisma.Decimal(line.quantity),
+        unitCode: line.unitCode,
+        netWeightKg: new Prisma.Decimal(line.netWeightKg),
+        grossWeightKg: new Prisma.Decimal(line.grossWeightKg),
+        lengthCm: line.lengthCm === undefined ? undefined : new Prisma.Decimal(line.lengthCm),
+        widthCm: line.widthCm === undefined ? undefined : new Prisma.Decimal(line.widthCm),
+        heightCm: line.heightCm === undefined ? undefined : new Prisma.Decimal(line.heightCm),
+        volumeCbm: lineVolumeCbm(line)
+      }))
+    });
+
+    const saved = await updatePackingTotals(tx, packingList.id, tenant.organisationId, tenant.userId);
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "packing_list.create",
+        entityType: "packing_list",
+        entityId: saved.id,
+        metadata: { invoiceId: invoice?.id || null, lines: lines.length, quick: true }
       }
     });
 
@@ -456,15 +583,24 @@ export function packingListIssueRequirements(packingList: {
   portOfDischarge: string | null;
   finalDestination: string | null;
 }) {
+  // Ports only make sense for sea and air shipments; road, courier and hand delivery need just a destination.
+  const needsPorts = shipmentNeedsPorts(packingList.shipmentMode);
   return [
     packingList.companyId ? null : "select a company",
     packingList.buyerId ? null : "select a buyer",
     packingList.lines.length > 0 ? null : "add at least one packing line",
     packingList.shipmentMode ? null : "enter shipment mode",
-    packingList.portOfLoading ? null : "enter port of loading",
-    packingList.portOfDischarge ? null : "enter port of discharge",
+    !needsPorts || packingList.portOfLoading ? null : "enter port of loading",
+    !needsPorts || packingList.portOfDischarge ? null : "enter port of discharge",
     packingList.finalDestination ? null : "enter final destination"
   ].filter((requirement): requirement is string => Boolean(requirement));
+}
+
+/** True for sea/air (and unknown) shipment modes; false for road, rail, courier and hand delivery. */
+export function shipmentNeedsPorts(shipmentMode: string | null | undefined) {
+  const mode = (shipmentMode || "").toLowerCase();
+  if (!mode) return true;
+  return !/(road|truck|lorry|courier|hand|rail|train|tempo|local)/.test(mode);
 }
 
 async function validateMasterRefs(

@@ -4,7 +4,7 @@ const optionalText = (max: number) =>
   z.string().trim().max(max).optional().transform((value) => (value ? value : undefined));
 
 const optionalUuid = z.string().uuid().optional().or(z.literal("")).transform((value) => value || undefined);
-const optionalNumber = z.coerce.number().min(0).optional().or(z.literal("")).transform((value) => value === "" ? undefined : value);
+const optionalNumber = z.preprocess((value) => (value === "" || value === null ? undefined : value), z.coerce.number().min(0).optional());
 
 export const packingListDraftSchema = z.object({
   invoiceId: optionalUuid,
@@ -43,6 +43,9 @@ export const packingListLineSchema = z.object({
   expectedVersion: z.coerce.number().int().min(1)
 });
 
+/** One box line on the one-page packing list form (no packing list id yet). */
+export const quickPackingLineSchema = packingListLineSchema.omit({ packingListId: true, expectedVersion: true, sortOrder: true });
+
 export const packingListLineDeleteSchema = z.object({
   packingListId: z.string().uuid(),
   lineId: z.string().uuid(),
@@ -56,5 +59,6 @@ export const packingListIssueSchema = z.object({
 
 export type PackingListDraftInput = z.infer<typeof packingListDraftSchema>;
 export type PackingListLineInput = z.infer<typeof packingListLineSchema>;
+export type QuickPackingLineInput = z.infer<typeof quickPackingLineSchema>;
 export type PackingListLineDeleteInput = z.infer<typeof packingListLineDeleteSchema>;
 export type PackingListIssueInput = z.infer<typeof packingListIssueSchema>;
