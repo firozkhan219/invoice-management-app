@@ -2272,8 +2272,11 @@ h3 { font-weight: 600; }
 .pack-line input, .pack-line select { width: 100%; min-width: 0; }
 .pack-size { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
 .pack-row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.pack-cell { display: grid; gap: 2px; min-width: 0; margin: 0; }
+.pack-cell > span { display: none; font-size: 11px; font-weight: 600; color: #64748b; }
 @media (max-width: 1100px) {
   .pack-line.quick-line-head { display: none; }
   .pack-line { grid-template-columns: 1fr 1fr 1fr; padding: 10px; border: 1px solid #e2e8f0; border-radius: 10px; }
   .pack-line .quick-product, .pack-line .pack-size, .pack-row-actions { grid-column: 1 / -1; }
+  .pack-cell > span { display: block; }
 }

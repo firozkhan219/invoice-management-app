@@ -191,8 +191,9 @@ export function QuickPackingForm({ invoices, products, buyers, companies, defaul
           </div>
           {lines.map((line) => (
             <div className="pack-line" key={line.key}>
-              <input aria-label="Box number" placeholder="Box no." title="Box / carton number" name="lineBox" value={line.box}
-                onChange={(event) => update(line.key, () => ({ box: event.target.value }))} />
+              <label className="pack-cell"><span>Box no.</span>
+                <input aria-label="Box number" placeholder="Box no." title="Box / carton number" name="lineBox" value={line.box}
+                onChange={(event) => update(line.key, () => ({ box: event.target.value }))} /></label>
               <div className="quick-product">
                 {line.invoiceItemId ? null : (
                   <select aria-label="Product" value={line.itemId} onChange={(event) => pickProduct(line.key, event.target.value)}>
@@ -210,29 +211,31 @@ export function QuickPackingForm({ invoices, products, buyers, companies, defaul
                 <input type="hidden" name="lineHsn" value={line.hsn} />
                 <input type="hidden" name="lineUnit" value={line.unit} />
               </div>
-              <input aria-label="Quantity" placeholder="Qty" title="Quantity" name="lineQuantity" type="number" min="0" step="0.0001" value={line.quantity}
-                onChange={(event) => changeQuantity(line.key, event.target.value)} />
-              <input aria-label="Net weight kg" placeholder="Net kg" title="Net weight (kg)" name="lineNet" type="number" min="0" step="0.001" value={line.net}
+              <label className="pack-cell"><span>Qty</span>
+                <input aria-label="Quantity" placeholder="Qty" title="Quantity" name="lineQuantity" type="number" min="0" step="0.0001" value={line.quantity}
+                onChange={(event) => changeQuantity(line.key, event.target.value)} /></label>
+              <label className="pack-cell"><span>Net kg</span>
+                <input aria-label="Net weight kg" placeholder="Net kg" title="Net weight (kg)" name="lineNet" type="number" min="0" step="0.001" value={line.net}
                 onChange={(event) => update(line.key, (current) => ({
                   net: event.target.value, netAuto: false, gross: current.grossAuto ? event.target.value : current.gross
-                }))} />
-              <input aria-label="Gross weight kg" placeholder="Gross kg" title="Gross weight (kg) including packing" name="lineGross" type="number" min="0" step="0.001" value={line.gross}
-                onChange={(event) => update(line.key, () => ({ gross: event.target.value, grossAuto: false }))} />
+                }))} /></label>
+              <label className="pack-cell"><span>Gross kg</span>
+                <input aria-label="Gross weight kg" placeholder="Gross kg" title="Gross weight (kg) including packing" name="lineGross" type="number" min="0" step="0.001" value={line.gross}
+                onChange={(event) => update(line.key, () => ({ gross: event.target.value, grossAuto: false }))} /></label>
               <div className="pack-size">
+                <label className="pack-cell"><span>L cm</span>
                 <input aria-label="Length cm" placeholder="L" title="Length (cm)" name="lineLength" type="number" min="0" step="0.1" value={line.length}
-                  onChange={(event) => update(line.key, () => ({ length: event.target.value }))} />
+                  onChange={(event) => update(line.key, () => ({ length: event.target.value }))} /></label>
+                <label className="pack-cell"><span>W cm</span>
                 <input aria-label="Width cm" placeholder="W" title="Width (cm)" name="lineWidth" type="number" min="0" step="0.1" value={line.width}
-                  onChange={(event) => update(line.key, () => ({ width: event.target.value }))} />
+                  onChange={(event) => update(line.key, () => ({ width: event.target.value }))} /></label>
+                <label className="pack-cell"><span>H cm</span>
                 <input aria-label="Height cm" placeholder="H" title="Height (cm)" name="lineHeight" type="number" min="0" step="0.1" value={line.height}
-                  onChange={(event) => update(line.key, () => ({ height: event.target.value }))} />
+                  onChange={(event) => update(line.key, () => ({ height: event.target.value }))} /></label>
               </div>
               <div className="pack-row-actions">
                 <button type="button" className="inline-action" aria-label="Copy as next box" title="Copy as next box"
-                  onClick={() => setLines((current) => {
-                    const index = current.findIndex((item) => item.key === line.key);
-                    const copy = { ...line, key: nextKey++, box: nextBox(current) };
-                    return [...current.slice(0, index + 1), copy, ...current.slice(index + 1)];
-                  })}>
+                  onClick={() => setLines((current) => [...current, { ...line, key: nextKey++, box: nextBox(current) }])}>
                   <Copy size={16} />
                 </button>
                 <button type="button" className="inline-action danger" aria-label="Remove line" title="Remove line"
