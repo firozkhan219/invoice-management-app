@@ -146,14 +146,10 @@ export default async function InvoiceEditorPage({
               <span><strong>Packing List</strong><small>{packingList.packingListNumber || "Issued document"}</small></span>
             </a>
           )) : canCreatePackingList ? (
-            <form className="document-link-form" action="/api/packing-lists" method="post">
-              <input type="hidden" name="invoiceId" value={invoice.id} />
-              <input type="hidden" name="packingListDate" value={new Date().toISOString().slice(0, 10)} />
-              <button className="document-link-card" type="submit">
-                <PackageCheck size={18} />
-                <span><strong>Create Packing List</strong><small>Copy from this invoice</small></span>
-              </button>
-            </form>
+            <Link className="document-link-card" href={`/packing-lists/new?invoiceId=${invoice.id}`}>
+              <PackageCheck size={18} />
+              <span><strong>Create Packing List</strong><small>Copy from this invoice</small></span>
+            </Link>
           ) : null}
           {issuedCreditNotes.map((creditNote) => (
             <a className="document-link-card" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer" key={creditNote.id}>
@@ -458,14 +454,10 @@ export default async function InvoiceEditorPage({
                   </a>
                 ))}
                 {canCreatePackingList ? (
-                  <form className="form" action="/api/packing-lists" method="post">
-                    <input type="hidden" name="invoiceId" value={invoice.id} />
-                    <input type="hidden" name="packingListDate" value={new Date().toISOString().slice(0, 10)} />
-                    <button className="button subtle" type="submit">
-                      <PackageCheck size={18} />
-                      Create packing list
-                    </button>
-                  </form>
+                  <Link className="button subtle" href={`/packing-lists/new?invoiceId=${invoice.id}`}>
+                    <PackageCheck size={18} />
+                    Create packing list
+                  </Link>
                 ) : null}
               </div>
             </section>

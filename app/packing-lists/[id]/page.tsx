@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, Download, FileText, PackagePlus
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
-import { getPackingList, getPackingListWorkspace, listPackingLists, packingListIssueRequirements } from "@/lib/packing-lists/packing-list-service";
+import { getPackingList, getPackingListWorkspace, listPackingLists, packingListIssueRequirements, shipmentNeedsPorts } from "@/lib/packing-lists/packing-list-service";
 
 export default async function PackingListDetailPage({
   params
@@ -34,7 +34,7 @@ export default async function PackingListDetailPage({
     hasBuyer: Boolean(packingList.buyerId),
     hasLines: packingList.lines.length > 0,
     hasShipmentMode: Boolean(packingList.shipmentMode),
-    hasRoute: Boolean(packingList.portOfLoading && packingList.portOfDischarge && packingList.finalDestination),
+    hasRoute: Boolean(packingList.finalDestination && (!shipmentNeedsPorts(packingList.shipmentMode) || (packingList.portOfLoading && packingList.portOfDischarge))),
     hasWeights: packingList.totalGrossWeightKg.gt(0) && packingList.totalNetWeightKg.gt(0)
   });
 
