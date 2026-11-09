@@ -32,8 +32,8 @@ export default async function CompaniesPage({
     <AppShell>
       <header className="page-header">
         <div>
-          <p className="muted">Master data</p>
-          <h1>Companies</h1>
+          <p className="muted">Saved records</p>
+          <h1>My Company</h1>
           <div className="meta-row">
             <span>Legal details, branding, bank accounts, and invoice defaults</span>
           </div>

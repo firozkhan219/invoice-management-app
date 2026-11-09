@@ -49,7 +49,9 @@ export default async function InvoiceEditorPage({
     hasBuyer: Boolean(invoice.buyerId),
     hasItems: invoice.items.length > 0,
     hasPositiveTotal: invoice.grandTotal.gt(0),
-    hasSeries: seriesList.length > 0,
+    hasSeries: Boolean(invoice.invoiceNumber) || seriesList.length > 0,
+    // Shipping fields only matter for export invoices (foreign currency or zero-rated export).
+    isExport: invoice.currency !== "INR" || invoice.taxMode === "zero_rated_export",
     hasExportFields: Boolean(invoice.portOfLoading && invoice.portOfDischarge && invoice.finalDestination)
   });
   const issueRequirements = [
@@ -115,8 +117,8 @@ export default async function InvoiceEditorPage({
 
       <section className="document-command-panel">
         <div>
-          <p className="muted">Production readiness</p>
-          <h2>{readiness.ready} of {readiness.total} checks complete</h2>
+          <p className="muted">{isDraft ? "Before issuing" : "Invoice status"}</p>
+          <h2>{readiness.ready === readiness.total ? (isDraft ? "Ready to issue" : "All details complete") : `${readiness.ready} of ${readiness.total} details complete`}</h2>
         </div>
         <div className="readiness-list">
           {readiness.items.map((item) => (
@@ -668,6 +670,7 @@ function invoiceReadiness(input: {
   hasItems: boolean;
   hasPositiveTotal: boolean;
   hasSeries: boolean;
+  isExport: boolean;
   hasExportFields: boolean;
 }) {
   const items = [
@@ -675,8 +678,8 @@ function invoiceReadiness(input: {
     { label: "Buyer", done: input.hasBuyer },
     { label: "Line items", done: input.hasItems },
     { label: "Amount", done: input.hasPositiveTotal },
-    { label: "Number series", done: input.hasSeries },
-    { label: "Export fields", done: input.hasExportFields }
+    { label: "Invoice number", done: input.hasSeries },
+    ...(input.isExport ? [{ label: "Shipping details", done: input.hasExportFields }] : [])
   ];
 
   return {
