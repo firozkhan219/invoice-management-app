@@ -66,18 +66,37 @@ export type InvoicePdfData = {
   declaration?: string | null;
 };
 
-const page = { margin: 28, right: 567, bottom: 812 };
-const tableX = page.margin;
-const tableWidth = page.right - page.margin;
-const widths = { marks: 70, hsn: 45, sku: 55, description: 174, quantity: 48, unit: 34, rate: 55, amount: 58 };
+// A4 is 595.28 x 841.89 pt. Content stays inside the margins; the footer sits below contentBottom.
+const page = { width: 595.28, height: 841.89, margin: 36 };
+const left = page.margin;
+const contentWidth = page.width - page.margin * 2;
+const right = left + contentWidth;
+const contentBottom = page.height - page.margin - 6;
+const footerY = page.height - 26;
+
+// Calm, print-friendly palette: dark ink for reading, one blue accent, soft greys for structure.
 const colors = {
-  ink: "#111827",
-  muted: "#475569",
-  border: "#cbd5e1",
-  soft: "#f8fafc",
-  primary: "#0f766e",
-  primaryLight: "#e6f4f1"
+  ink: "#1f2a44",
+  body: "#334155",
+  muted: "#6b7a90",
+  line: "#e2e8f0",
+  zebra: "#f7f9fc",
+  soft: "#f3f6fb",
+  accent: "#2855c5",
+  accentSoft: "#eaf0fc"
 };
+
+const columns = [
+  { key: "index", label: "#", width: 22, align: "left" as const },
+  { key: "description", label: "Description of goods", width: 0, align: "left" as const },
+  { key: "hsn", label: "HSN", width: 46, align: "left" as const },
+  { key: "quantity", label: "Qty", width: 44, align: "right" as const },
+  { key: "unit", label: "Unit", width: 34, align: "center" as const },
+  { key: "rate", label: "Rate", width: 62, align: "right" as const },
+  { key: "amount", label: "Amount", width: 78, align: "right" as const }
+];
+columns[1].width = contentWidth - columns.reduce((sum, column) => sum + column.width, 0);
+const cellPad = 6;
 
 export function renderInvoicePdf(data: InvoicePdfData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -89,7 +108,7 @@ export function renderInvoicePdf(data: InvoicePdfData): Promise<Buffer> {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
 
     drawInvoice(doc, data);
-    addPageNumbers(doc);
+    addFooters(doc, data);
     doc.end();
   });
 }
@@ -99,117 +118,192 @@ export function invoicePdfFilename(invoiceNumber: string): string {
 }
 
 function drawInvoice(doc: PDFKit.PDFDocument, data: InvoicePdfData) {
-  doc.lineWidth(0.6).strokeColor(colors.border).fillColor(colors.ink);
-  drawDocumentTitle(doc, data);
-
-  let y = drawHeaderGrid(doc, data, 72);
-  y = drawPartyGrid(doc, data, y);
-  y = drawLogisticsGrid(doc, data, y);
-  y = drawItemsTable(doc, data.lines, y, data.currency);
-  y = drawTotalsAndWords(doc, data, y);
-  drawBankDeclarationSignature(doc, data, y);
-}
-
-function drawDocumentTitle(doc: PDFKit.PDFDocument, data: InvoicePdfData) {
-  const title = data.documentTitle || "Tax Invoice";
-  doc.roundedRect(page.margin, 26, tableWidth, 34, 6).fill(colors.primary);
-  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(15).text(title, page.margin + 14, 36, {
-    width: 250
-  });
-  doc.font("Helvetica").fontSize(8).text(`Generated ${formatDate(new Date())}`, page.margin, 38, {
-    width: tableWidth - 14,
-    align: "right"
-  });
   doc.fillColor(colors.ink);
+  let y = drawHeader(doc, data, page.margin);
+  y = drawParties(doc, data, y + 14);
+  y = drawShipmentDetails(doc, data, y + 12);
+  y = drawItemsTable(doc, data, y + 14);
+  y = drawTotals(doc, data, y + 12);
+  drawBankAndSignature(doc, data, y + 14);
 }
 
-function drawHeaderGrid(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
-  const leftW = 300;
-  const rightW = tableWidth - leftW;
+/* ---------- Header: company on the left, document facts on the right ---------- */
+
+function drawHeader(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
+  const isCredit = data.documentTitle === "Credit Note";
   const companyName = text(data.company, "legalName", "Company");
-  drawCell(doc, tableX, y, leftW, 98, "Exporter", [
-    companyName,
-    text(data.company, "tradingName"),
+  const metaWidth = 196;
+  const metaX = right - metaWidth;
+
+  // Left: logo (or initials) then company details.
+  const markSize = 46;
+  drawBrandMark(doc, left, y, markSize, companyName, data.logo);
+  const companyX = left + markSize + 12;
+  const companyWidth = metaX - companyX - 16;
+  let leftY = y;
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(colors.ink);
+  doc.text(companyName, companyX, leftY, { width: companyWidth });
+  leftY = doc.y + 2;
+  const tradingName = text(data.company, "tradingName");
+  if (tradingName && tradingName !== companyName) {
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.muted).text(tradingName, companyX, leftY, { width: companyWidth });
+    leftY = doc.y + 2;
+  }
+  const companyLines = [
     ...formatAddressLines(data.company),
-    ids(data.company).join(" | ")
-  ], true);
-  drawBrandMark(doc, tableX + leftW - 48, y + 12, companyName, data.logo);
+    ids(data.company).join("   ")
+  ].filter(Boolean);
+  doc.font("Helvetica").fontSize(8).fillColor(colors.body).text(companyLines.join("\n"), companyX, leftY, {
+    width: companyWidth,
+    lineGap: 1.5
+  });
+  leftY = Math.max(doc.y, y + markSize);
 
-  const rightX = tableX + leftW;
-  drawCell(doc, rightX, y, rightW / 2, 49, data.documentTitle === "Credit Note" ? "Credit note no." : "Invoice no.", [data.invoiceNumber], true);
-  drawCell(doc, rightX + rightW / 2, y, rightW / 2, 49, "Document date", [formatDate(data.invoiceDate), data.dueDate ? `Due ${formatDate(data.dueDate)}` : ""]);
-  drawCell(doc, rightX, y + 49, rightW / 2, 49, "Exporter ref.", [data.exporterReference || text(data.company, "iec") || "-"]);
-  drawCell(doc, rightX + rightW / 2, y + 49, rightW / 2, 49, data.documentTitle === "Credit Note" ? "Original invoice" : "Buyer order", [
-    data.documentTitle === "Credit Note"
-      ? [data.originalInvoiceNumber, data.originalInvoiceDate ? formatDate(data.originalInvoiceDate) : ""].filter(Boolean).join(" - ")
-      : [data.buyerOrderNumber, data.buyerOrderDate ? formatDate(data.buyerOrderDate) : ""].filter(Boolean).join(" - ")
-  ]);
+  // Right: title and key facts as label / value rows.
+  const title = (data.documentTitle || "Tax Invoice").toUpperCase();
+  doc.font("Helvetica-Bold").fontSize(18).fillColor(colors.accent).text(title, metaX, y - 2, {
+    width: metaWidth,
+    align: "right",
+    characterSpacing: 0.6
+  });
+  let rightY = doc.y + 6;
+  const facts: Array<[string, string]> = [
+    [isCredit ? "Credit note no." : "Invoice no.", data.invoiceNumber],
+    ["Date", formatDate(data.invoiceDate)],
+    ["Due date", data.dueDate ? formatDate(data.dueDate) : ""],
+    isCredit
+      ? ["Original invoice", [data.originalInvoiceNumber, data.originalInvoiceDate ? formatDate(data.originalInvoiceDate) : ""].filter(Boolean).join(" · ")]
+      : ["Buyer order", [data.buyerOrderNumber, data.buyerOrderDate ? formatDate(data.buyerOrderDate) : ""].filter(Boolean).join(" · ")],
+    ["Exporter ref.", data.exporterReference || ""]
+  ];
+  facts.filter(([, value]) => value).forEach(([label, value], index) => {
+    const bold = index === 0;
+    doc.font("Helvetica").fontSize(8).fillColor(colors.muted).text(label, metaX, rightY + 1, { width: 80 });
+    doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(bold ? 9.5 : 8.5).fillColor(colors.ink)
+      .text(value, metaX + 80, rightY, { width: metaWidth - 80, align: "right" });
+    rightY = Math.max(doc.y, rightY + 12) + 3;
+  });
 
-  return y + 98;
+  const bottom = Math.max(leftY, rightY) + 12;
+  doc.save().moveTo(left, bottom).lineTo(right, bottom).lineWidth(1.4).strokeColor(colors.accent).stroke().restore();
+  return bottom;
 }
 
-function drawPartyGrid(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
-  const half = tableWidth / 2;
-  drawCell(doc, tableX, y, half, 100, "Consignee / ship to", [
-    text(data.consignee, "displayName", text(data.buyer, "displayName", "-")),
-    ...formatAddressLines(data.shippingAddress),
-    ids(data.consignee).join(" | ")
-  ]);
-  drawCell(doc, tableX + half, y, half, 100, "Buyer / bill to", [
-    text(data.buyer, "displayName", text(data.buyer, "legalName", "-")),
+/* ---------- Bill to / Ship to ---------- */
+
+function drawParties(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
+  const gap = 24;
+  const colWidth = (contentWidth - gap) / 2;
+  const buyerName = text(data.buyer, "displayName", text(data.buyer, "legalName", "-"));
+  const shipName = text(data.consignee, "displayName", buyerName);
+  const shipLines = data.shippingAddress ? formatAddressLines(data.shippingAddress) : ["Same as billing address"];
+
+  const billBottom = drawParty(doc, left, y, colWidth, "Bill to", buyerName, [
     ...formatAddressLines(data.billingAddress),
-    ids(data.buyer).join(" | ")
+    ids(data.buyer).join("   ")
   ]);
-  drawCell(doc, tableX, y + 100, half, 34, "Country of origin", [text(data.company, "country", "India")]);
-  drawCell(doc, tableX + half, y + 100, half, 34, "Country of final destination", [
-    text(data.shippingAddress, "country", data.finalDestination || text(data.buyer, "country", ""))
+  const shipBottom = drawParty(doc, left + colWidth + gap, y, colWidth, "Ship to / consignee", shipName, [
+    ...shipLines,
+    ids(data.consignee).join("   ")
   ]);
-  return y + 134;
+  return Math.max(billBottom, shipBottom);
 }
 
-function drawLogisticsGrid(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
-  const third = tableWidth / 3;
-  drawCell(doc, tableX, y, third, 36, "Pre-Carriage by", [data.preCarriageBy || ""]);
-  drawCell(doc, tableX + third, y, third, 36, "Place of Receipt by Pre-Carrier", [data.placeOfReceipt || ""]);
-  drawCell(doc, tableX + third * 2, y, third, 36, "Terms of Delivery and Payment", [data.termsOfDelivery || ""]);
-  drawCell(doc, tableX, y + 36, third, 36, "Vessel/Flight No.", [data.vesselFlightNo || ""]);
-  drawCell(doc, tableX + third, y + 36, third, 36, "Port of Loading", [data.portOfLoading || ""]);
-  drawCell(doc, tableX + third * 2, y + 36, third, 36, "Port of Discharge / Final Destination", [
-    [data.portOfDischarge, data.finalDestination].filter(Boolean).join(" / ")
-  ]);
-  return y + 72;
+function drawParty(doc: PDFKit.PDFDocument, x: number, y: number, width: number, label: string, name: string, lines: string[]): number {
+  sectionLabel(doc, label, x, y, width);
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(colors.ink).text(name, x, y + 14, { width });
+  const rest = lines.filter(Boolean);
+  if (rest.length) {
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.body).text(rest.join("\n"), x, doc.y + 2, { width, lineGap: 1.5 });
+  }
+  return doc.y;
 }
 
-function drawItemsTable(doc: PDFKit.PDFDocument, lines: InvoicePdfLine[], startY: number, currency: string): number {
-  let y = startY;
-  drawItemHeader(doc, y, currency);
-  y += 36;
+/* ---------- Shipment details: only the fields that are filled in ---------- */
 
-  lines.forEach((item, index) => {
-    const rowHeight = Math.max(28, doc.heightOfString(item.description, { width: widths.description - 8 }) + 14);
-    if (y + rowHeight + 172 > page.bottom) {
+function drawShipmentDetails(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
+  const destinationCountry = text(data.shippingAddress, "country", text(data.buyer, "country", ""));
+  const fields: Array<[string, string]> = ([
+    ["Country of origin", text(data.company, "country", "India")],
+    ["Country of final destination", destinationCountry],
+    ["Pre-carriage by", data.preCarriageBy || ""],
+    ["Place of receipt", data.placeOfReceipt || ""],
+    ["Vessel / flight no.", data.vesselFlightNo || ""],
+    ["Port of loading", data.portOfLoading || ""],
+    ["Port of discharge", data.portOfDischarge || ""],
+    ["Final destination", data.finalDestination || ""],
+    ["Terms of delivery & payment", data.termsOfDelivery || ""]
+  ] as Array<[string, string]>).filter(([, value]) => value);
+  if (fields.length === 0) return y;
+
+  const perRow = 3;
+  const pad = 9;
+  const rowGap = 4;
+  const cellWidth = (contentWidth - pad * 2) / perRow;
+  const rows: Array<Array<[string, string]>> = [];
+  for (let i = 0; i < fields.length; i += perRow) rows.push(fields.slice(i, i + perRow));
+
+  doc.font("Helvetica").fontSize(8.5);
+  const rowHeights = rows.map((row) => 11 + Math.max(...row.map(([, value]) => doc.heightOfString(value, { width: cellWidth - 10 }))));
+  const boxHeight = pad * 2 + rowHeights.reduce((sum, h) => sum + h, 0) + (rows.length - 1) * rowGap;
+
+  doc.roundedRect(left, y, contentWidth, boxHeight, 6).fill(colors.soft);
+  let rowY = y + pad;
+  rows.forEach((row, rowIndex) => {
+    row.forEach(([label, value], col) => {
+      const x = left + pad + col * cellWidth;
+      doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text(label.toUpperCase(), x, rowY, { width: cellWidth - 10, characterSpacing: 0.3 });
+      doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(value, x, rowY + 10, { width: cellWidth - 10 });
+    });
+    rowY += rowHeights[rowIndex] + rowGap;
+  });
+  return y + boxHeight;
+}
+
+/* ---------- Items table ---------- */
+
+function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoicePdfData, startY: number): number {
+  let y = drawTableHeader(doc, startY, data.currency);
+
+  data.lines.forEach((item, index) => {
+    const descWidth = columns[1].width - cellPad * 2;
+    doc.font("Helvetica").fontSize(8.5);
+    const descHeight = doc.heightOfString(item.description, { width: descWidth });
+    doc.fontSize(7.5);
+    const codeHeight = item.sku ? doc.heightOfString(`Item code ${item.sku}`, { width: descWidth }) + 2 : 0;
+    const rowHeight = Math.max(22, descHeight + codeHeight + 11);
+
+    if (y + rowHeight > contentBottom) {
       doc.addPage();
-      y = page.margin;
-      drawItemHeader(doc, y, currency);
-      y += 36;
+      y = drawTableHeader(doc, page.margin, data.currency);
     }
 
-    const cells = [
-      { value: index === 0 ? "Marks & No.\nContainer No." : "", width: widths.marks, align: "left" as const },
-      { value: item.hsnSac || "-", width: widths.hsn, align: "left" as const },
-      { value: item.sku || String(item.sortOrder), width: widths.sku, align: "left" as const },
-      { value: item.description, width: widths.description, align: "left" as const },
-      { value: formatQty(item.quantity), width: widths.quantity, align: "right" as const },
-      { value: item.unitCode || "", width: widths.unit, align: "center" as const },
-      { value: money(item.rate), width: widths.rate, align: "right" as const },
-      // Amount = taxable value of the line (qty x rate - line discount); taxes are added in the totals box.
-      { value: money(item.taxableAmount), width: widths.amount, align: "right" as const }
-    ];
+    if (index % 2 === 1) doc.rect(left, y, contentWidth, rowHeight).fill(colors.zebra);
+    doc.save().moveTo(left, y + rowHeight).lineTo(right, y + rowHeight).lineWidth(0.5).strokeColor(colors.line).stroke().restore();
 
-    let x = tableX;
-    cells.forEach((cell) => {
-      drawPlainCell(doc, x, y, cell.width, rowHeight, cell.value, cell.align);
-      x += cell.width;
+    const values: Record<string, string> = {
+      index: String(index + 1),
+      hsn: item.hsnSac || "-",
+      quantity: formatQty(item.quantity),
+      unit: item.unitCode || "",
+      rate: money(item.rate),
+      // Amount = taxable value of the line (qty x rate - line discount); taxes are added in the totals.
+      amount: money(item.taxableAmount)
+    };
+
+    let x = left;
+    columns.forEach((column) => {
+      if (column.key === "description") {
+        doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(item.description, x + cellPad, y + 6, { width: descWidth });
+        if (item.sku) {
+          doc.font("Helvetica").fontSize(7.5).fillColor(colors.muted).text(`Item code ${item.sku}`, x + cellPad, doc.y + 2, { width: descWidth });
+        }
+      } else {
+        const bold = column.key === "amount";
+        doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(8.5).fillColor(column.key === "index" ? colors.muted : colors.ink)
+          .text(values[column.key], x + cellPad, y + 6, { width: column.width - cellPad * 2, align: column.align, lineBreak: false });
+      }
+      x += column.width;
     });
     y += rowHeight;
   });
@@ -217,134 +311,183 @@ function drawItemsTable(doc: PDFKit.PDFDocument, lines: InvoicePdfLine[], startY
   return y;
 }
 
-function drawItemHeader(doc: PDFKit.PDFDocument, y: number, currency: string) {
-  const headers = [
-    ["Marks & No.\nContainer No.", widths.marks],
-    ["HSN Code", widths.hsn],
-    ["Item No.", widths.sku],
-    ["Description of Goods", widths.description],
-    ["Quantity", widths.quantity],
-    ["Unit", widths.unit],
-    [`Rate in ${currency}`, widths.rate],
-    [`Amount in ${currency}`, widths.amount]
-  ] as const;
-
-  let x = tableX;
-  headers.forEach(([label, width]) => {
-    doc.rect(x, y, width, 36).fillAndStroke(colors.soft, colors.border);
-    doc.fillColor(colors.ink).font("Helvetica-Bold").fontSize(7.5).text(label, x + 3, y + 7, { width: width - 6, align: width <= 58 ? "center" : "left" });
-    x += width;
+function drawTableHeader(doc: PDFKit.PDFDocument, y: number, currency: string): number {
+  const height = 24;
+  doc.roundedRect(left, y, contentWidth, height, 4).fill(colors.accentSoft);
+  let x = left;
+  columns.forEach((column) => {
+    const label = column.key === "rate" || column.key === "amount" ? `${column.label} (${currency})` : column.label;
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(colors.ink).text(label.toUpperCase(), x + cellPad, y + 8.5, {
+      width: column.width - cellPad * 2,
+      align: column.align,
+      characterSpacing: 0.3,
+      lineBreak: false
+    });
+    x += column.width;
   });
+  return y + height;
 }
 
-function drawTotalsAndWords(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
-  if (y + 150 > page.bottom) {
+/* ---------- Totals and amount in words ---------- */
+
+function drawTotals(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
+  const rows = visibleTotalRows(data);
+  const rowHeight = 18;
+  const grandHeight = 28;
+  const totalsWidth = 228;
+  const totalsX = right - totalsWidth;
+  const wordsWidth = totalsX - left - 20;
+  const totalsHeight = (rows.length - 1) * rowHeight + grandHeight + 4;
+
+  doc.font("Helvetica").fontSize(9);
+  const words = amountInWords(Number(data.totals.grandTotal), data.currency);
+  const wordsHeight = 30 + doc.heightOfString(words, { width: wordsWidth - 20 })
+    + (data.notes ? 18 + doc.heightOfString(data.notes, { width: wordsWidth - 20 }) : 0);
+  const blockHeight = Math.max(totalsHeight, wordsHeight);
+
+  if (y + blockHeight > contentBottom) {
     doc.addPage();
     y = page.margin;
   }
 
-  const leftW = 335;
-  const rightLabelW = 120;
-  const amountW = tableWidth - leftW - rightLabelW;
-  const totalRows = visibleTotalRows(data);
-  const boxH = 24 + totalRows.length * 20;
+  // Left: amount in words (and notes) in a soft box.
+  doc.roundedRect(left, y, wordsWidth, wordsHeight, 6).fill(colors.soft);
+  sectionLabel(doc, "Amount in words", left + 10, y + 10, wordsWidth - 20);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(colors.ink).text(words, left + 10, y + 24, { width: wordsWidth - 20 });
+  if (data.notes) {
+    const notesY = doc.y + 8;
+    sectionLabel(doc, "Notes", left + 10, notesY, wordsWidth - 20);
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.body).text(data.notes, left + 10, notesY + 13, { width: wordsWidth - 20 });
+  }
 
-  drawCell(doc, tableX, y, leftW, boxH, "Amount chargeable (in words)", [
-    amountInWords(Number(data.totals.grandTotal), data.currency)
-  ]);
-
+  // Right: label / value rows, then a highlighted grand total.
   let rowY = y;
-  totalRows.forEach(([label, value], index) => {
-    const h = index === totalRows.length - 1 ? 24 : 20;
-    drawPlainCell(doc, tableX + leftW, rowY, rightLabelW, h, label, "left", index === totalRows.length - 1);
-    drawPlainCell(doc, tableX + leftW + rightLabelW, rowY, amountW, h, money(value), "right", index === totalRows.length - 1);
-    rowY += h;
+  rows.forEach(([label, value], index) => {
+    const isGrand = index === rows.length - 1;
+    if (isGrand) {
+      rowY += 4;
+      doc.roundedRect(totalsX, rowY, totalsWidth, grandHeight, 5).fill(colors.accent);
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#ffffff").text(label, totalsX + 10, rowY + 9.5, { width: 120, lineBreak: false });
+      doc.font("Helvetica-Bold").fontSize(11).fillColor("#ffffff").text(money(value), totalsX + 120, rowY + 8.5, {
+        width: totalsWidth - 130,
+        align: "right",
+        lineBreak: false
+      });
+      return;
+    }
+    const isDiscount = label.startsWith("Less");
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.body).text(label, totalsX + 10, rowY + 5, { width: 120, lineBreak: false });
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(`${isDiscount ? "- " : ""}${money(value)}`, totalsX + 120, rowY + 5, {
+      width: totalsWidth - 130,
+      align: "right",
+      lineBreak: false
+    });
+    doc.save().moveTo(totalsX + 10, rowY + rowHeight).lineTo(right - 10, rowY + rowHeight).lineWidth(0.5).strokeColor(colors.line).stroke().restore();
+    rowY += rowHeight;
   });
 
-  return y + boxH;
+  return y + blockHeight;
 }
 
-function drawBankDeclarationSignature(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number) {
-  if (y + 146 > page.bottom) {
+/* ---------- Bank details, signature and declaration ---------- */
+
+function drawBankAndSignature(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number) {
+  const declaration = data.declaration
+    || "We declare that this Invoice shows the actual prices of the goods described and that all particulars are true and correct.";
+  const bankLines: Array<[string, string]> = ([
+    ["Bank", text(data.bank, "bankName")],
+    ["Account name", text(data.bank, "accountHolderName")],
+    ["Account no.", text(data.bank, "accountNumber") || (text(data.bank, "accountNumberLast4") ? `xxxxxx${text(data.bank, "accountNumberLast4")}` : "")],
+    ["IFSC", text(data.bank, "ifsc")],
+    ["SWIFT", text(data.bank, "swiftBic")],
+    ["Branch", text(data.bank, "branchName")]
+  ] as Array<[string, string]>).filter(([, value]) => value);
+
+  const gap = 20;
+  const signWidth = 190;
+  const bankWidth = contentWidth - signWidth - gap;
+  // Bank details sit in two columns to keep the block short.
+  const bankRows = Math.ceil(bankLines.length / 2);
+  const boxHeight = Math.max(80, 28 + bankRows * 20);
+  doc.font("Helvetica").fontSize(7.5);
+  const declarationHeight = 16 + doc.heightOfString(declaration, { width: contentWidth });
+
+  if (y + boxHeight + declarationHeight + 10 > contentBottom) {
     doc.addPage();
     y = page.margin;
   }
 
-  const leftW = 335;
-  const rightW = tableWidth - leftW;
-  drawCell(doc, tableX, y, leftW, 82, "Bank details", [
-    text(data.bank, "bankName") ? `Bank Name - ${text(data.bank, "bankName")}` : "",
-    text(data.bank, "accountHolderName") ? `Company Name - ${text(data.bank, "accountHolderName")}` : "",
-    text(data.bank, "accountNumber")
-      ? `Account Number - ${text(data.bank, "accountNumber")}`
-      : text(data.bank, "accountNumberLast4") ? `Account Number - xxxxxx${text(data.bank, "accountNumberLast4")}` : "",
-    [text(data.bank, "ifsc") ? `IFSC - ${text(data.bank, "ifsc")}` : "", text(data.bank, "swiftBic") ? `Swift Code - ${text(data.bank, "swiftBic")}` : ""].filter(Boolean).join(", "),
-    text(data.bank, "branchName") ? `Branch - ${text(data.bank, "branchName")}` : ""
-  ]);
-  drawCell(doc, tableX + leftW, y, rightW, 82, "Signature", [
-    `For, ${text(data.company, "legalName", "Company")}`,
-    "",
-    "",
-    text(data.company, "signatoryName"),
-    text(data.company, "signatoryDesignation", "Authorised Signatory")
-  ]);
-  drawSignatureImage(doc, tableX + leftW + 18, y + 31, rightW - 36, 22, data.signature);
-  doc.moveTo(tableX + leftW + 18, y + 56).lineTo(tableX + leftW + rightW - 18, y + 56).strokeColor(colors.border).stroke();
-  drawCell(doc, tableX, y + 82, tableWidth, 58, "Declaration", [
-    data.declaration || "We declare that this Invoice shows the actual prices of the goods described and that all particulars are true and correct."
-  ]);
+  // Bank details
+  doc.roundedRect(left, y, bankWidth, boxHeight, 6).lineWidth(0.7).strokeColor(colors.line).stroke();
+  sectionLabel(doc, "Bank details", left + 10, y + 10, bankWidth - 20);
+  if (bankLines.length === 0) {
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.muted).text("No bank account selected.", left + 10, y + 26, { width: bankWidth - 20 });
+  }
+  const bankColWidth = (bankWidth - 20) / 2;
+  bankLines.forEach(([label, value], index) => {
+    const x = left + 10 + (index % 2) * bankColWidth;
+    const rowY = y + 25 + Math.floor(index / 2) * 20;
+    doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text(label, x, rowY, { width: bankColWidth - 8, lineBreak: false });
+    doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(value, x, rowY + 9, { width: bankColWidth - 8, lineBreak: false, ellipsis: true });
+  });
+
+  // Signature
+  const signX = right - signWidth;
+  doc.roundedRect(signX, y, signWidth, boxHeight, 6).lineWidth(0.7).strokeColor(colors.line).stroke();
+  doc.font("Helvetica").fontSize(8).fillColor(colors.body).text(`For ${text(data.company, "legalName", "Company")}`, signX + 10, y + 10, {
+    width: signWidth - 20,
+    align: "center"
+  });
+  const lineY = y + boxHeight - 30;
+  drawSignatureImage(doc, signX + 20, lineY - 30, signWidth - 40, 28, data.signature);
+  doc.save().moveTo(signX + 20, lineY).lineTo(signX + signWidth - 20, lineY).lineWidth(0.6).strokeColor(colors.muted).stroke().restore();
+  const signatory = [text(data.company, "signatoryName"), text(data.company, "signatoryDesignation", "Authorised Signatory")].filter(Boolean).join("\n");
+  doc.font("Helvetica").fontSize(8).fillColor(colors.ink).text(signatory, signX + 10, lineY + 5, { width: signWidth - 20, align: "center" });
+
+  // Declaration
+  const declarationY = y + boxHeight + 12;
+  sectionLabel(doc, "Declaration", left, declarationY, contentWidth);
+  doc.font("Helvetica").fontSize(7.5).fillColor(colors.body).text(declaration, left, declarationY + 13, { width: contentWidth, lineGap: 1 });
 }
 
 function visibleTotalRows(data: InvoicePdfData): Array<[string, string | number]> {
   const rows: Array<[string, string | number]> = [
-    ["TOTAL Amount", data.totals.subtotal],
+    ["Subtotal", data.totals.subtotal],
     // The invoice discount reduces the taxable value, so it is shown before the taxes.
     ["Less: Discount", data.totals.invoiceDiscount],
     ...(Number(data.totals.invoiceDiscount || 0) !== 0
-      ? [["Taxable Value", data.totals.taxableTotal] as [string, string | number]]
+      ? [["Taxable value", data.totals.taxableTotal] as [string, string | number]]
       : []),
     ["IGST", data.totals.igstTotal],
     ["CGST", data.totals.cgstTotal],
     ["SGST", data.totals.sgstTotal],
-    ["Other Charges", data.totals.otherCharges],
-    ["Round Off", data.totals.roundOff],
-    [data.currency === "INR" ? "Grand Total in Rs." : `Grand Total in ${data.currency}`, data.totals.grandTotal]
+    ["Other charges", data.totals.otherCharges],
+    ["Round off", data.totals.roundOff],
+    [data.currency === "INR" ? "Grand total (Rs.)" : `Grand total (${data.currency})`, data.totals.grandTotal]
   ];
-  return rows.filter(([label, value]) => label.startsWith("Grand") || Number(value || 0) !== 0 || label === "TOTAL Amount");
+  return rows.filter(([label, value]) => label.startsWith("Grand") || Number(value || 0) !== 0 || label === "Subtotal");
 }
 
-function drawCell(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, title: string, rows: string[], headline = false) {
-  doc.rect(x, y, width, height).fillAndStroke("#ffffff", colors.border);
-  doc.rect(x, y, width, 16).fill(colors.soft);
-  doc.fillColor(colors.muted).font("Helvetica-Bold").fontSize(7).text(title.toUpperCase(), x + 5, y + 5, { width: width - 10 });
-  doc.fillColor(colors.ink).font(headline ? "Helvetica-Bold" : "Helvetica").fontSize(headline ? 8 : 7.5).text(rows.filter(Boolean).join("\n"), x + 5, y + 21, {
-    width: width - 8,
-    height: height - 24,
-    ellipsis: true
+function sectionLabel(doc: PDFKit.PDFDocument, label: string, x: number, y: number, width: number) {
+  doc.font("Helvetica-Bold").fontSize(7).fillColor(colors.accent).text(label.toUpperCase(), x, y, {
+    width,
+    characterSpacing: 0.6,
+    lineBreak: false
   });
 }
 
-function drawPlainCell(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, value: string, align: "left" | "right" | "center", bold = false) {
-  doc.rect(x, y, width, height).fillAndStroke("#ffffff", colors.border);
-  doc.fillColor(colors.ink).font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(bold ? 8 : 7.5).text(value, x + 3, y + 7, {
-    width: width - 6,
-    height: height - 8,
-    align,
-    ellipsis: true
-  });
-}
-
-function addPageNumbers(doc: PDFKit.PDFDocument) {
+function addFooters(doc: PDFKit.PDFDocument, data: InvoicePdfData) {
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i += 1) {
     doc.switchToPage(i);
-    doc.font("Helvetica").fontSize(7).fillColor(colors.muted);
-    const label = `Page ${i + 1} of ${range.count}`;
     // The footer sits inside the bottom margin; drop the margin while writing it so
     // PDFKit does not treat it as overflow and append an empty extra page.
     const bottomMargin = doc.page.margins.bottom;
     doc.page.margins.bottom = 0;
-    doc.text(label, page.margin + (tableWidth - doc.widthOfString(label)) / 2, 820, { lineBreak: false });
+    doc.save().moveTo(left, footerY - 7).lineTo(right, footerY - 7).lineWidth(0.5).strokeColor(colors.line).stroke().restore();
+    doc.font("Helvetica").fontSize(7).fillColor(colors.muted);
+    doc.text(`${data.documentTitle || "Tax Invoice"} ${data.invoiceNumber}`, left, footerY, { width: contentWidth / 2, lineBreak: false });
+    doc.text(`Page ${i + 1} of ${range.count}`, left + contentWidth / 2, footerY, { width: contentWidth / 2, align: "right", lineBreak: false });
     doc.page.margins.bottom = bottomMargin;
   }
 }
@@ -353,12 +496,13 @@ function drawBrandMark(
   doc: PDFKit.PDFDocument,
   x: number,
   y: number,
+  size: number,
   name: string,
   logo: InvoicePdfData["logo"]
 ) {
   if (logo && canDrawImage(logo.mimeType)) {
     try {
-      doc.image(logo.data, x - 6, y - 2, { fit: [46, 42], align: "center", valign: "center" });
+      doc.image(logo.data, x, y, { fit: [size, size], align: "center", valign: "center" });
       return;
     } catch {
       // Fall back to initials if an uploaded image cannot be decoded by PDFKit.
@@ -371,10 +515,11 @@ function drawBrandMark(
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "IM";
-  doc.roundedRect(x, y, 34, 34, 5).fill(colors.primaryLight);
-  doc.fillColor(colors.primary).font("Helvetica-Bold").fontSize(11).text(initials, x, y + 11, {
-    width: 34,
-    align: "center"
+  doc.roundedRect(x, y, size, size, 8).fill(colors.accentSoft);
+  doc.fillColor(colors.accent).font("Helvetica-Bold").fontSize(15).text(initials, x, y + size / 2 - 7, {
+    width: size,
+    align: "center",
+    lineBreak: false
   });
   doc.fillColor(colors.ink);
 }
@@ -390,7 +535,7 @@ function drawSignatureImage(
   if (!signature || !canDrawImage(signature.mimeType)) return;
 
   try {
-    doc.image(signature.data, x, y, { fit: [width, height], valign: "center" });
+    doc.image(signature.data, x, y, { fit: [width, height], align: "center", valign: "bottom" });
   } catch {
     // Keep the signature line visible if the uploaded image cannot be decoded.
   }
@@ -407,9 +552,9 @@ function text(record: JsonRecord | null | undefined, key: string, fallback = "")
 
 function ids(record: JsonRecord | null): string[] {
   return [
-    text(record, "gstin") ? `GSTIN - ${text(record, "gstin")}` : "",
-    text(record, "pan") ? `PAN - ${text(record, "pan")}` : "",
-    text(record, "iec") ? `IEC - ${text(record, "iec")}` : ""
+    text(record, "gstin") ? `GSTIN ${text(record, "gstin")}` : "",
+    text(record, "pan") ? `PAN ${text(record, "pan")}` : "",
+    text(record, "iec") ? `IEC ${text(record, "iec")}` : ""
   ].filter(Boolean);
 }
 
@@ -419,13 +564,12 @@ function formatAddressLines(record: JsonRecord | null): string[] {
     text(record, "addressLine2"),
     [text(record, "city"), text(record, "state"), text(record, "postcode")].filter(Boolean).join(", "),
     text(record, "country"),
-    text(record, "phone") ? `Mobile# ${text(record, "phone")}` : "",
-    text(record, "email")
+    [text(record, "phone") ? `Ph. ${text(record, "phone")}` : "", text(record, "email")].filter(Boolean).join("   ")
   ].filter(Boolean);
 }
 
 function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(date);
 }
 
 function money(value: string | number): string {

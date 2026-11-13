@@ -8,6 +8,7 @@ import { getInvoiceIssueOptions, listInvoices } from "@/lib/invoices/invoice-ser
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
+import { formatMoney } from "@/lib/format";
 
 export default async function InvoicesPage({
   searchParams
@@ -50,17 +51,10 @@ export default async function InvoicesPage({
           ) : null}
         </div>
       </header>
-      <section className="panel">
-        <div className="section-title">
-          <div>
-            <p className="muted">Search and filter</p>
-            <h2>Invoice register</h2>
-          </div>
-          <Search size={20} />
-        </div>
-        <form className="form" method="get">
-          <div className="form-grid three">
-            <div className="field"><label htmlFor="q">Search</label><input id="q" name="q" defaultValue={filters?.q || ""} /></div>
+      <section className="panel filter-panel">
+        <form method="get">
+          <div className="filter-row">
+            <div className="field filter-search"><label htmlFor="q">Search</label><input id="q" name="q" placeholder="Invoice no. or buyer" defaultValue={filters?.q || ""} /></div>
             <div className="field">
               <label htmlFor="status">Status</label>
               <select id="status" name="status" defaultValue={filters?.status || ""}>
@@ -72,14 +66,12 @@ export default async function InvoicesPage({
                 <option value="cancelled">Cancelled</option>
               </select>
             </div>
-            <div className="field"><label htmlFor="currency">Currency</label><input id="currency" name="currency" maxLength={3} defaultValue={filters?.currency || ""} /></div>
+            <div className="field filter-currency"><label htmlFor="currency">Currency</label><input id="currency" name="currency" maxLength={3} placeholder="Any" defaultValue={filters?.currency || ""} /></div>
             <div className="field"><label htmlFor="dateFrom">From</label><input id="dateFrom" name="dateFrom" type="date" defaultValue={filters?.dateFrom || ""} /></div>
             <div className="field"><label htmlFor="dateTo">To</label><input id="dateTo" name="dateTo" type="date" defaultValue={filters?.dateTo || ""} /></div>
-          </div>
-          <div className="toolbar">
             <button className="button" type="submit">
               <Search size={18} />
-              Apply filters
+              Filter
             </button>
           </div>
         </form>
@@ -96,9 +88,9 @@ export default async function InvoicesPage({
           <div className="empty-state">No invoices found. Create a draft or adjust the filters.</div>
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table register">
               <thead>
-                <tr><th>Date</th><th>Number</th><th>Buyer</th><th>Status</th><th>Lifecycle</th><th>Total</th><th>Paid</th><th>Balance</th><th>Action</th></tr>
+                <tr><th>Date</th><th>Number</th><th>Buyer</th><th>Status</th><th>Lifecycle</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Balance</th><th>Action</th></tr>
               </thead>
               <tbody>
                 {invoices.map((invoice) => {
@@ -128,9 +120,9 @@ export default async function InvoicesPage({
                       <td>{invoice.buyer?.displayName || "-"}</td>
                       <td><span className={`status-badge ${invoice.status}`}>{invoice.status.replace("_", " ")}</span></td>
                       <td><span className={lifecycleLabel === "Ready to issue" ? "badge" : "badge neutral"}>{lifecycleLabel}</span></td>
-                      <td>{invoice.currency} {invoice.grandTotal.toString()}</td>
-                      <td>{invoice.currency} {invoice.paidTotal.toString()}</td>
-                      <td>{invoice.currency} {invoice.balanceDue.toString()}</td>
+                      <td className="num strong">{formatMoney(invoice.currency, invoice.grandTotal)}</td>
+                      <td className="num">{formatMoney(invoice.currency, invoice.paidTotal)}</td>
+                      <td className="num">{formatMoney(invoice.currency, invoice.balanceDue)}</td>
                       <td>
                         {canIssue ? (
                           <form className="inline-action" action="/api/invoices/issue" method="post">

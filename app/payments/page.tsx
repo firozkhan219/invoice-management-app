@@ -7,6 +7,7 @@ import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { getPaymentEntryData, listPayments } from "@/lib/payments/payment-service";
 import { hasPermission } from "@/lib/permissions/roles";
 import { todayIso } from "@/lib/dates";
+import { formatMoney } from "@/lib/format";
 
 export default async function PaymentsPage({ searchParams }: { searchParams?: Promise<{ invoiceId?: string }> }) {
   const user = await getCurrentUser();
@@ -41,7 +42,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
             <div className="empty-state">No payments recorded yet.</div>
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="table register">
                 <thead>
                   <tr><th>Date</th><th>Invoice</th><th>Buyer</th><th>Amount</th><th>Status</th><th>Action</th></tr>
                 </thead>
@@ -54,7 +55,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
                         <td>{payment.paymentDate.toISOString().slice(0, 10)}</td>
                         <td>{invoice ? <Link href={`/invoices/${invoice.id}`}>{invoice.invoiceNumber || invoice.id}</Link> : "-"}</td>
                         <td>{invoice?.buyer?.displayName || "-"}</td>
-                        <td>{payment.currency} {payment.amount.toString()}</td>
+                        <td>{formatMoney(payment.currency, payment.amount)}</td>
                         <td><span className="badge">{payment.status}</span></td>
                         <td>
                           {payment.status === "posted" && canManage ? (
@@ -102,7 +103,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams?: Pr
                 <select id="invoiceId" name="invoiceId" required defaultValue={selectedInvoice?.id}>
                   {invoices.map((invoice) => (
                     <option key={invoice.id} value={invoice.id}>
-                      {invoice.invoiceNumber || invoice.id} - {invoice.buyer?.displayName || "No buyer"} - Balance {invoice.currency} {invoice.balanceDue.toString()}
+                      {invoice.invoiceNumber || invoice.id} - {invoice.buyer?.displayName || "No buyer"} - Balance {formatMoney(invoice.currency, invoice.balanceDue)}
                     </option>
                   ))}
                 </select>
