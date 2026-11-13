@@ -14,6 +14,7 @@ describe("invoice PDF rendering", () => {
 
     expect(buffer.subarray(0, 4).toString()).toBe("%PDF");
     expect(buffer.byteLength).toBeGreaterThan(1000);
+    expect(buffer.toString("latin1").match(/\/Type\s*\/Page\b/g)).toHaveLength(1);
   });
 });
 

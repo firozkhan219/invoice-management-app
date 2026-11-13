@@ -1,0 +1,61 @@
+name: invoice-management
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: invoices
+      MYSQL_USER: invoices
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Generate .env.online first}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Generate .env.online first}
+    volumes:
+      - database:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -u invoices invoices -e 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      DATABASE_URL: mysql://invoices:${DB_PASSWORD}@db:3306/invoices
+    depends_on:
+      db:
+        condition: service_healthy
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql://invoices:${DB_PASSWORD}@db:3306/invoices
+      AUTH_SECRET: ${AUTH_SECRET:?Generate .env.online first}
+      BANK_FIELD_ENCRYPTION_KEY: ${BANK_FIELD_ENCRYPTION_KEY:?Generate .env.online first}
+      NEXT_PUBLIC_APP_URL: https://${APP_DOMAIN:?Set your domain}
+      ALLOWED_ORIGIN: https://${APP_DOMAIN}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+volumes:
+  database:
+  uploads:
+  certificates:
+  caddy_config:
