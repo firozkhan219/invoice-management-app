@@ -13,8 +13,8 @@ export async function POST(request: Request) {
   try {
     await loginUser(parsed.data);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Login failed.";
-    return Response.json({ ok: false, error: message }, { status: 500 });
+    const invalid = error instanceof Error && error.message === "Invalid email or password.";
+    return Response.json({ ok: false, error: invalid ? "Invalid email or password." : "Sign in is temporarily unavailable. Please try again shortly." }, { status: invalid ? 401 : 503 });
   }
 
   redirect("/dashboard");

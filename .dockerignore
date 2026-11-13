@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.env
+.env.*
+dist
+tmp
+uploads
+offline-data
+coverage
+*.zip
+*.log
+*.tsbuildinfo
+prisma/offline.db
+prisma/schema.offline.prisma
+database-dumps
+generated-documents

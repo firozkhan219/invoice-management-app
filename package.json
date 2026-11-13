@@ -19,7 +19,9 @@
     "offline:dev": "node scripts/offline.mjs dev",
     "offline:build": "node scripts/offline.mjs build",
     "offline:studio": "node scripts/offline.mjs studio",
-    "offline:package:windows": "node scripts/package-offline-windows.mjs"
+    "offline:package:windows": "node scripts/package-offline-windows.mjs",
+    "offline:package:windows-exe": "node scripts/package-offline-windows-exe.mjs",
+    "offline:launcher:exe": "node scripts/build-offline-launcher-exe.mjs"
   },
   "keywords": [],
   "author": "",

@@ -3,7 +3,6 @@ import Link from "next/link";
 import { AlertTriangle, Building2, CircleDollarSign, FileClock, FileText, Package, ReceiptIndianRupee, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDashboardSummary } from "@/lib/dashboard/dashboard-service";
-import { permissionsForRole } from "@/lib/permissions/roles";
 import { AppShell } from "@/components/app-shell";
 
 export default async function DashboardPage() {
@@ -32,7 +31,7 @@ export default async function DashboardPage() {
     <AppShell>
         <header className="page-header">
           <div>
-            <p className="muted">Organisation</p>
+            <p className="muted">Business overview</p>
             <h1>{membership.organisation.name}</h1>
             <div className="meta-row">
               <span>{user.email}</span>
@@ -41,10 +40,18 @@ export default async function DashboardPage() {
           </div>
           <div className="toolbar">
             <Link className="button" href="/invoices/new">New invoice</Link>
-            <Link className="button subtle" href="/payments">Record payment</Link>
+            <Link className="button subtle" href="/packing-lists">New packing list</Link>
           </div>
         </header>
 
+        <section className="panel workflow-panel">
+          <div className="section-title"><div><p className="muted">Your daily workspace</p><h2>From invoice to shipment</h2></div><span className="badge">Three simple steps</span></div>
+          <div className="workflow-grid">
+            <Link href={summary.companyCount === 0 ? "/companies" : summary.buyerCount === 0 ? "/buyers" : "/items"} className="workflow-step"><span className="workflow-number">01</span><strong>Set up your business</strong><p>Save company details, customers, and products once. Reuse them on every document.</p><span className="workflow-link">{summary.companyCount === 0 ? "Add your company" : summary.buyerCount === 0 ? "Add your first buyer" : "Manage products"} &rarr;</span></Link>
+            <Link href="/invoices/new" className="workflow-step"><span className="workflow-number">02</span><strong>Create an invoice</strong><p>Choose a buyer, add products, and issue a professional PDF for your customer.</p><span className="workflow-link">Create invoice &rarr;</span></Link>
+            <Link href="/packing-lists" className="workflow-step"><span className="workflow-number">03</span><strong>Prepare your packing list</strong><p>Start from an invoice or create a separate list with packages and shipment details.</p><span className="workflow-link">Open packing lists &rarr;</span></Link>
+          </div>
+        </section>
         <div className="summary-grid">
           <div className="stat">
             <div className="kpi-row">
@@ -99,7 +106,7 @@ export default async function DashboardPage() {
               </div>
               <Link href="/invoices">View all</Link>
             </div>
-            {summary.recentInvoices.length === 0 ? <div className="empty-state">No invoices yet.</div> : (
+            {summary.recentInvoices.length === 0 ? <div className="empty-state"><FileText size={26} /><strong>Your invoices will appear here</strong><p>Create your first invoice to start tracking billing and payments.</p><Link className="button subtle" href="/invoices/new">Create invoice</Link></div> : (
               <div className="table-wrap">
                 <table className="table">
                   <thead>
@@ -127,7 +134,7 @@ export default async function DashboardPage() {
               </div>
               <Link href="/payments">View all</Link>
             </div>
-            {summary.recentPayments.length === 0 ? <div className="empty-state">No payments yet.</div> : (
+            {summary.recentPayments.length === 0 ? <div className="empty-state"><CircleDollarSign size={26} /><strong>Track every payment</strong><p>Record a payment against an issued invoice to keep balances up to date.</p><Link className="button subtle" href="/payments">View payments</Link></div> : (
               <div className="table-wrap">
                 <table className="table">
                   <thead>
@@ -186,15 +193,6 @@ export default async function DashboardPage() {
             </div>
             <p className="muted top-space">Signed in as {user.email} with {membership.role} permissions.</p>
           </div>
-        </div>
-        <div className="panel top-space">
-          <div className="section-title">
-            <div>
-              <p className="muted">Access</p>
-              <h2>Enabled permissions</h2>
-            </div>
-          </div>
-          <p className="muted">{permissionsForRole(membership.role).join(", ")}</p>
         </div>
     </AppShell>
   );

@@ -13,8 +13,8 @@ export async function POST(request: Request) {
   try {
     await registerUser(parsed.data);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Registration failed.";
-    return Response.json({ ok: false, error: message }, { status: 500 });
+    const duplicate = error instanceof Error && error.message === "An account already exists for this email.";
+    return Response.json({ ok: false, error: duplicate ? "An account already exists for this email. Please sign in." : "Registration is temporarily unavailable. Please try again shortly." }, { status: duplicate ? 409 : 503 });
   }
 
   redirect("/dashboard");

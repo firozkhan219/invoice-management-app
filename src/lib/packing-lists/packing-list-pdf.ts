@@ -287,7 +287,8 @@ function addPageNumbers(doc: PDFKit.PDFDocument) {
   for (let i = range.start; i < range.start + range.count; i += 1) {
     doc.switchToPage(i);
     doc.font("Helvetica").fontSize(7).fillColor(colors.muted);
-    doc.text(`Page ${i + 1} of ${range.count}`, page.margin, 820, { width: tableWidth, align: "center" });
+    const label = `Page ${i + 1} of ${range.count}`;
+    doc.text(label, page.margin + (tableWidth - doc.widthOfString(label)) / 2, 820, { lineBreak: false });
   }
 }
 

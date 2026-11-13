@@ -2,6 +2,10 @@
 
 Multi-tenant invoice management app for Decorative Handicrafts, built with Next.js, Prisma, MySQL/MariaDB, and PDFKit.
 
+## Online deployment
+
+The Docker deployment includes MySQL, persistent private uploads, database migrations, and an HTTPS reverse proxy. See [online deployment](docs/online-deployment.md) for configuration, deployment, and verification. Existing offline data remains separate.
+
 ## Local Development
 
 ```bash
