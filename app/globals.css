@@ -2280,3 +2280,145 @@ h3 { font-weight: 600; }
   .pack-line .quick-product, .pack-line .pack-size, .pack-row-actions { grid-column: 1 / -1; }
   .pack-cell > span { display: block; }
 }
+
+/* =====================================================================
+   Clean layout layer
+   Calmer spacing, consistent form controls, readable tables, and
+   detail pages that never overflow sideways on laptop screens.
+   ===================================================================== */
+:root {
+  --control-h: 42px;
+  --control-border: #d6dde8;
+  --surface-soft: #f7f9fc;
+  --text-soft: #5b6b82;
+}
+
+/* Grid children may shrink instead of pushing the page wider. */
+.grid > *, .stack > *, .two-column > * { min-width: 0; }
+aside.grid, .stack { grid-template-columns: minmax(0, 1fr); }
+.grid { gap: 20px; }
+.top-space { margin-top: 20px; }
+
+/* ---------- Form controls: one height, one border, one focus ring ---------- */
+.content .field input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]),
+.content .field select,
+.content .quick-line input,
+.content .quick-line select,
+.content .pack-line input,
+.content .pack-line select,
+.content .inline-action select,
+.content .inline-action input:not([type="hidden"]) {
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background-color: #fff;
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.2;
+}
+.content .field textarea,
+.content .quick-line textarea {
+  padding: 10px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.content .field input:focus,
+.content .field select:focus,
+.content .field textarea:focus,
+.content .quick-line input:focus,
+.content .quick-line select:focus,
+.content .pack-line input:focus,
+.content .pack-line select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px #e3ebff;
+  outline: 0;
+}
+.content .field input::placeholder,
+.content .quick-line input::placeholder { color: #94a3b8; }
+.field { gap: 7px; }
+.field label { font-size: 13px; font-weight: 600; color: #3a4a62; }
+.field .muted, .field small { font-size: 12px; }
+.form { gap: 18px; }
+.form-grid { gap: 16px 18px; }
+
+/* Side panels are narrow: never squeeze 3-4 fields into one row there. */
+aside .form-grid.three,
+aside .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* ---------- Detail pages (invoice, credit note, packing list) ---------- */
+/* Forms and fields fill their card instead of growing to their longest option text. */
+.form, .field { grid-template-columns: minmax(0, 1fr); }
+.field select { text-overflow: ellipsis; }
+
+@media (max-width: 1480px) {
+  .two-column.document-layout { grid-template-columns: minmax(0, 1fr); }
+  /* Small action cards share a row; cards holding a form take the full width. */
+  .document-layout > aside.grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 20px; }
+  .document-layout > aside.grid > * { flex: 1 1 320px; }
+  .document-layout > aside.grid > section:has(.form-grid) { flex-basis: 100%; }
+  .document-layout > aside .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .document-layout > aside .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .document-layout > aside .form-grid.three,
+  .document-layout > aside .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---------- Tables ---------- */
+.table th { white-space: nowrap; font-size: 11px; letter-spacing: .05em; color: var(--text-soft); }
+.table td { font-variant-numeric: tabular-nums; vertical-align: middle; }
+.table th.num, .table td.num { text-align: right; white-space: nowrap; }
+.table td.strong { font-weight: 600; color: var(--foreground); }
+.table.line-items { min-width: 760px; }
+.table.line-items td.description { min-width: 260px; line-height: 1.45; }
+.table.compact th { color: var(--text-soft); font-weight: 600; }
+.table.compact td { font-variant-numeric: tabular-nums; }
+.panel > .table:not(.compact) { display: block; overflow-x: auto; }
+
+/* ---------- Invoice register filters: one tidy row ---------- */
+.filter-panel { padding: 18px 20px; }
+.filter-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) minmax(130px, 1fr) minmax(90px, .6fr) minmax(140px, 1fr) minmax(140px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+.filter-row .button { height: var(--control-h); }
+@media (max-width: 1100px) {
+  .filter-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .filter-row .filter-search { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filter-row .button { grid-column: 1 / -1; }
+}
+
+/* ---------- Quick invoice / packing rows: aligned, breathable ---------- */
+.quick-lines { gap: 12px; }
+.quick-line { align-items: center; gap: 10px; }
+.quick-line.quick-line-head { align-items: end; padding-bottom: 2px; border-bottom: 1px solid var(--border); }
+.quick-product { gap: 8px; }
+.quick-amount { padding-top: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.quick-totals { padding-top: 14px; border-top: 1px solid var(--border); align-items: baseline; color: var(--text-soft); }
+.quick-totals strong { color: var(--foreground); }
+.quick-grand { color: var(--foreground); font-size: 18px; }
+
+/* ---------- Summary cards ---------- */
+.stat strong { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Mobile ---------- */
+@media (max-width: 780px) {
+  .document-layout > aside.grid > * { flex-basis: 100%; }
+  .table.line-items td.description { min-width: 200px; }
+}
+.table.compact tr.total-row th, .table.compact tr.total-row td { font-weight: 700; color: var(--foreground); background: var(--surface-soft); }
+.table.register td { white-space: nowrap; }
+.table .badge, .table .status-badge { white-space: nowrap; }
+@media (max-width: 780px) {
+  .summary-grid .stat { min-height: 0; padding: 14px 16px; }
+  .summary-grid .stat strong { margin-top: 4px; }
+}

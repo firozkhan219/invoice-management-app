@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listCreditNotes } from "@/lib/credit-notes/credit-note-service";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { formatMoney } from "@/lib/format";
 
 export default async function CreditNotesPage() {
   const user = await getCurrentUser();
@@ -33,7 +34,7 @@ export default async function CreditNotesPage() {
           <div className="empty-state">No credit notes yet. Open an issued invoice to create one.</div>
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table register">
               <thead>
                 <tr><th>Date</th><th>Number</th><th>Original invoice</th><th>Buyer</th><th>Status</th><th>Total</th></tr>
               </thead>
@@ -49,7 +50,7 @@ export default async function CreditNotesPage() {
                     </td>
                     <td>{creditNote.originalInvoice.buyer?.displayName || "-"}</td>
                     <td><span className={`status-badge ${creditNote.status}`}>{creditNote.status}</span></td>
-                    <td>{creditNote.currency} {creditNote.grandTotal.toString()}</td>
+                    <td>{formatMoney(creditNote.currency, creditNote.grandTotal)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -9,6 +9,7 @@ import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
 import { DraftFields, isoDate } from "../draft-fields";
+import { formatMoney, formatAmount, formatQuantity } from "@/lib/format";
 
 export default async function InvoiceEditorPage({
   params,
@@ -97,21 +98,21 @@ export default async function InvoiceEditorPage({
       <div className="summary-grid">
         <div className="stat">
           <span className="muted">Grand total</span>
-          <strong>{invoice.currency} {invoice.grandTotal.toString()}</strong>
+          <strong>{formatMoney(invoice.currency, invoice.grandTotal)}</strong>
         </div>
         <div className="stat">
           <span className="muted">Paid</span>
-          <strong>{invoice.currency} {invoice.paidTotal.toString()}</strong>
+          <strong>{formatMoney(invoice.currency, invoice.paidTotal)}</strong>
         </div>
         {invoice.creditedTotal.gt(0) ? (
           <div className="stat">
             <span className="muted">Credited</span>
-            <strong>{invoice.currency} {invoice.creditedTotal.toString()}</strong>
+            <strong>{formatMoney(invoice.currency, invoice.creditedTotal)}</strong>
           </div>
         ) : null}
         <div className="stat">
           <span className="muted">Balance</span>
-          <strong>{invoice.currency} {invoice.balanceDue.toString()}</strong>
+          <strong>{formatMoney(invoice.currency, invoice.balanceDue)}</strong>
         </div>
       </div>
 
@@ -160,7 +161,7 @@ export default async function InvoiceEditorPage({
         </div>
       </section>
 
-      <div className="grid two-column">
+      <div className="grid two-column document-layout">
         <div className="grid">
           <section className="panel">
             <div className="section-title">
@@ -179,16 +180,17 @@ export default async function InvoiceEditorPage({
               <tr><th>Exporter reference</th><td>{invoice.exporterReference || "-"}</td></tr>
               <tr><th>Tax mode</th><td>{invoice.taxMode.replace("_", " ")}{invoice.cgstTotal.gt(0) ? " → CGST + SGST" : invoice.igstTotal.gt(0) ? " → IGST" : ""}</td></tr>
               <tr><th>Place of supply</th><td>{invoice.placeOfSupplyStateCode || invoice.shippingAddress?.stateCode || invoice.billingAddress?.stateCode || "-"}</td></tr>
-              <tr><th>Invoice discount</th><td>{invoice.invoiceDiscount.toString()}</td></tr>
-              <tr><th>Other charges</th><td>{invoice.otherCharges.toString()}</td></tr>
-              <tr><th>Subtotal</th><td>{invoice.subtotal.toString()}</td></tr>
-              <tr><th>IGST</th><td>{invoice.igstTotal.toString()}</td></tr>
-              <tr><th>CGST</th><td>{invoice.cgstTotal.toString()}</td></tr>
-              <tr><th>SGST</th><td>{invoice.sgstTotal.toString()}</td></tr>
-              <tr><th>Round off</th><td>{invoice.roundOff.toString()}</td></tr>
-              <tr><th>Grand total</th><td>{invoice.currency} {invoice.grandTotal.toString()}</td></tr>
-              <tr><th>Paid total</th><td>{invoice.currency} {invoice.paidTotal.toString()}</td></tr>
-              <tr><th>Balance due</th><td>{invoice.currency} {invoice.balanceDue.toString()}</td></tr>
+              <tr><th>Subtotal</th><td>{formatAmount(invoice.subtotal)}</td></tr>
+              {/* Only show adjustments and taxes that actually apply, to keep the overview short. */}
+              {invoice.invoiceDiscount.isZero() ? null : <tr><th>Invoice discount</th><td>- {formatAmount(invoice.invoiceDiscount)}</td></tr>}
+              {invoice.otherCharges.isZero() ? null : <tr><th>Other charges</th><td>{formatAmount(invoice.otherCharges)}</td></tr>}
+              {invoice.igstTotal.isZero() ? null : <tr><th>IGST</th><td>{formatAmount(invoice.igstTotal)}</td></tr>}
+              {invoice.cgstTotal.isZero() ? null : <tr><th>CGST</th><td>{formatAmount(invoice.cgstTotal)}</td></tr>}
+              {invoice.sgstTotal.isZero() ? null : <tr><th>SGST</th><td>{formatAmount(invoice.sgstTotal)}</td></tr>}
+              {invoice.roundOff.isZero() ? null : <tr><th>Round off</th><td>{formatAmount(invoice.roundOff)}</td></tr>}
+              <tr className="total-row"><th>Grand total</th><td>{formatMoney(invoice.currency, invoice.grandTotal)}</td></tr>
+              <tr><th>Paid total</th><td>{formatMoney(invoice.currency, invoice.paidTotal)}</td></tr>
+              <tr><th>Balance due</th><td>{formatMoney(invoice.currency, invoice.balanceDue)}</td></tr>
             </tbody>
             </table>
           </section>
@@ -204,16 +206,17 @@ export default async function InvoiceEditorPage({
             {invoice.items.length === 0 ? (
               <p className="muted">No line items yet.</p>
             ) : (
-              <table className="table">
+              <div className="table-wrap">
+              <table className="table line-items">
                 <thead>
                   <tr>
                     <th>#</th>
-                    <th>Description</th>
+                    <th className="description">Description</th>
                     <th>HSN/SAC</th>
-                    <th>Qty</th>
-                    <th>Rate</th>
-                    <th>GST</th>
-                    <th>Total</th>
+                    <th className="num">Qty</th>
+                    <th className="num">Rate</th>
+                    <th className="num">GST</th>
+                    <th className="num">Amount</th>
                     {isDraft && mayCreate ? <th>Actions</th> : null}
                   </tr>
                 </thead>
@@ -221,12 +224,12 @@ export default async function InvoiceEditorPage({
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
                       <td>{item.sortOrder}</td>
-                      <td>{item.description}</td>
+                      <td className="description">{item.description}</td>
                       <td>{item.hsnSac || "-"}</td>
-                      <td>{item.quantity.toString()} {item.unitCode || ""}</td>
-                      <td>{item.rate.toString()}</td>
-                      <td>{item.gstRate.toString()}%</td>
-                      <td>{item.lineTotal.toString()}</td>
+                      <td className="num">{formatQuantity(item.quantity)} {item.unitCode || ""}</td>
+                      <td className="num">{formatAmount(item.rate)}</td>
+                      <td className="num">{item.gstRate.toString()}%</td>
+                      <td className="num strong">{formatAmount(item.lineTotal)}</td>
                       {isDraft && mayCreate ? (
                         <td>
                           <div className="line-actions">
@@ -293,6 +296,7 @@ export default async function InvoiceEditorPage({
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </section>
 
@@ -349,7 +353,7 @@ export default async function InvoiceEditorPage({
                         <td>{creditNote.creditNoteDate.toISOString().slice(0, 10)}</td>
                         <td>{creditNote.creditNoteNumber || "Draft"}</td>
                         <td><span className={`status-badge ${creditNote.status}`}>{creditNote.status}</span></td>
-                        <td>{creditNote.currency} {creditNote.grandTotal.toString()}</td>
+                        <td>{formatMoney(creditNote.currency, creditNote.grandTotal)}</td>
                         <td>{creditNote.reason || "-"}</td>
                       </tr>
                     ))}

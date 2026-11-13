@@ -79,7 +79,7 @@ export default async function PackingListsPage({
           </div>
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table register">
               <thead>
                 <tr>
                   <th>Date</th>

@@ -7,6 +7,7 @@ import { getCreditNote, getCreditNoteWorkspace } from "@/lib/credit-notes/credit
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
+import { formatMoney, formatAmount, formatQuantity } from "@/lib/format";
 
 export default async function CreditNoteDetailPage({
   params,
@@ -54,12 +55,12 @@ export default async function CreditNoteDetailPage({
       </header>
 
       <div className="summary-grid">
-        <div className="stat"><span className="muted">Credit total</span><strong>{creditNote.currency} {creditNote.grandTotal.toString()}</strong></div>
+        <div className="stat"><span className="muted">Credit total</span><strong>{formatMoney(creditNote.currency, creditNote.grandTotal)}</strong></div>
         <div className="stat"><span className="muted">Original invoice</span><strong>{original.invoiceNumber || "-"}</strong></div>
-        <div className="stat"><span className="muted">Original total</span><strong>{original.currency} {original.grandTotal.toString()}</strong></div>
+        <div className="stat"><span className="muted">Original total</span><strong>{formatMoney(original.currency, original.grandTotal)}</strong></div>
       </div>
 
-      <div className="grid two-column">
+      <div className="grid two-column document-layout">
         <div className="grid">
           <section className="panel">
             <div className="section-title">
@@ -98,10 +99,10 @@ export default async function CreditNoteDetailPage({
                       <tr key={line.id}>
                         <td>{line.sortOrder}</td>
                         <td>{line.description}</td>
-                        <td>{line.quantity.toString()} {line.unitCode || ""}</td>
-                        <td>{line.rate.toString()}</td>
+                        <td>{formatQuantity(line.quantity)} {line.unitCode || ""}</td>
+                        <td>{formatAmount(line.rate)}</td>
                         <td>{line.gstRate.toString()}%</td>
-                        <td>{line.lineTotal.toString()}</td>
+                        <td>{formatAmount(line.lineTotal)}</td>
                         {isDraft ? (
                           <td>
                             <form action="/api/credit-notes/lines/delete" method="post">
@@ -137,8 +138,8 @@ export default async function CreditNoteDetailPage({
                     {original.items.map((item) => (
                       <tr key={item.id}>
                         <td>{item.description}</td>
-                        <td>{item.quantity.toString()} {item.unitCode || ""}</td>
-                        <td>{item.rate.toString()}</td>
+                        <td>{formatQuantity(item.quantity)} {item.unitCode || ""}</td>
+                        <td>{formatAmount(item.rate)}</td>
                         <td>
                           <form className="inline-action" action="/api/credit-notes/lines" method="post">
                             <input type="hidden" name="creditNoteId" value={creditNote.id} />

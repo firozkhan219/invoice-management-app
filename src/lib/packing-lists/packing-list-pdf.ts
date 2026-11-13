@@ -57,13 +57,14 @@ const page = { margin: 28, right: 567, bottom: 812 };
 const tableX = page.margin;
 const tableWidth = page.right - page.margin;
 const widths = { marks: 78, sku: 58, description: 170, quantity: 48, net: 52, gross: 52, dimensions: 64, cbm: 48 };
+// Same calm palette as the invoice PDF so documents sent together look like one set.
 const colors = {
-  ink: "#111827",
-  muted: "#475569",
-  border: "#cbd5e1",
-  soft: "#f8fafc",
-  primary: "#0f766e",
-  primaryLight: "#e6f4f1"
+  ink: "#1f2a44",
+  muted: "#6b7a90",
+  border: "#e2e8f0",
+  soft: "#f3f6fb",
+  primary: "#2855c5",
+  primaryLight: "#eaf0fc"
 };
 
 export function renderPackingListPdf(data: PackingListPdfData): Promise<Buffer> {
