@@ -2482,3 +2482,192 @@ aside .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-grid .stat { min-height: 0; padding: 14px 16px; }
   .summary-grid .stat strong { margin-top: 4px; }
 }
+
+/* Invoice workspace: compact header, inline details, totals box */
+.invoice-head {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.invoice-head-title h1 {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 26px;
+  gap: 10px;
+  line-height: 1.15;
+  margin: 4px 0;
+}
+
+.invoice-head-title h1 .status-badge {
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.invoice-head-title p {
+  margin: 0;
+}
+
+.back-link {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 13px;
+  gap: 4px;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  color: var(--primary);
+}
+
+.invoice-head .toolbar form {
+  display: contents;
+}
+
+.readiness-strip {
+  align-items: center;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 8px 14px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+}
+
+.invoice-summary {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  padding: 18px 20px;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 12px 20px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  margin: 0;
+}
+
+.detail-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.detail-grid dd {
+  font-size: 14px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.totals-box {
+  align-self: start;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-collapse: separate;
+  border-radius: 8px;
+  border-spacing: 0;
+  font-size: 13px;
+  padding: 8px 12px;
+  width: 100%;
+}
+
+.totals-box th {
+  color: var(--muted);
+  font-weight: 500;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.totals-box td {
+  font-variant-numeric: tabular-nums;
+  padding: 4px 0;
+  text-align: right;
+}
+
+.totals-box tr.grand th,
+.totals-box tr.grand td {
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 700;
+  padding-top: 8px;
+}
+
+.totals-box tr.balance th,
+.totals-box tr.balance td {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.edit-panel > summary,
+.add-line > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+
+.edit-panel > summary::-webkit-details-marker,
+.add-line > summary::-webkit-details-marker {
+  display: none;
+}
+
+.edit-panel > summary .muted {
+  font-size: 13px;
+}
+
+.edit-panel[open] > summary {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+}
+
+.edit-panel {
+  scroll-margin-top: 16px;
+}
+
+.add-line {
+  border-top: 1px dashed var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.add-line > summary {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.add-line[open] > summary {
+  margin-bottom: 12px;
+}
+
+.toolbar.start {
+  justify-content: flex-start;
+}
+
+@media (max-width: 760px) {
+  .invoice-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .invoice-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .invoice-head .toolbar {
+    justify-content: flex-start;
+  }
+}

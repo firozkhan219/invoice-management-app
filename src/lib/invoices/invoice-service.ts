@@ -16,7 +16,8 @@ import type {
   InvoiceItemDeleteInput,
   InvoiceItemInput,
   InvoiceItemUpdateInput,
-  IssueInvoiceInput
+  IssueInvoiceInput,
+  ReopenInvoiceInput
 } from "@/lib/validation/invoices";
 
 export type InvoiceListFilters = {
@@ -318,6 +319,9 @@ export async function deleteDraftInvoice(context: TenantContext, input: DeleteDr
 
     if (!invoice) throw new Error("Invoice not found.");
     if (!canDeleteDraftInvoiceStatus(invoice.status)) throw new Error("Only draft invoices can be deleted.");
+    if (invoice.invoiceNumber) {
+      throw new Error(`Invoice ${invoice.invoiceNumber} was already issued. Issue it again to keep it, or issue it and then cancel it.`);
+    }
 
     await tx.invoiceItem.deleteMany({
       where: { invoiceId: invoice.id, organisationId: tenant.organisationId }
@@ -650,58 +654,91 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
       const organisation = await tx.organisation.findUniqueOrThrow({
         where: { id: tenant.organisationId }
       });
-      const series = await tx.invoiceNumberSeries.findFirst({
-        where: { id: input.seriesId, organisationId: tenant.organisationId, isActive: true }
-      });
-      if (!series) throw new Error("Invoice number series not found.");
+      const manualNumber = input.invoiceNumber?.trim() || null;
+      const isReissue = Boolean(invoice.invoiceNumber);
+      let seriesId: string | null = invoice.seriesId;
+      let sequenceNumber: number | null = invoice.sequenceNumber;
+      let invoiceNumber: string;
 
-      const range = periodRangeForRule(series.resetRule, invoice.invoiceDate, organisation.financialYearStart);
-      const used = await tx.invoice.aggregate({
-        where: {
-          seriesId: series.id,
-          sequenceNumber: { not: null },
-          ...(range ? { invoiceDate: { gte: range.start, lt: range.end } } : {})
-        },
-        _max: { sequenceNumber: true }
-      });
-      const plan = planSequence(series, invoice.invoiceDate, organisation.financialYearStart, used._max.sequenceNumber ?? null);
-      let sequenceNumber = plan.sequence;
-      const render = (sequence: number) => renderInvoiceNumber({
-        pattern: series.pattern,
-        prefix: series.prefix,
-        sequence,
-        date: invoice.invoiceDate,
-        financialYearStartMonth: organisation.financialYearStart
-      });
-      let invoiceNumber = render(sequenceNumber);
-      let numberAvailable = false;
-
-      for (let attempt = 0; attempt < 100; attempt += 1) {
+      const numberIsFree = async (candidate: string) => {
         const existingInvoice = await tx.invoice.findFirst({
-          where: { organisationId: tenant.organisationId, invoiceNumber, NOT: { id: invoice.id } },
+          where: { organisationId: tenant.organisationId, invoiceNumber: candidate, NOT: { id: invoice.id } },
           select: { id: true }
         });
         const voidedNumber = await tx.invoiceNumberVoid.findFirst({
-          where: { organisationId: tenant.organisationId, invoiceNumber },
+          where: { organisationId: tenant.organisationId, invoiceNumber: candidate },
           select: { id: true }
         });
-        if (!existingInvoice && !voidedNumber) {
-          numberAvailable = true;
-          break;
+        return !existingInvoice && !voidedNumber;
+      };
+
+      if (isReissue && (!manualNumber || manualNumber === invoice.invoiceNumber)) {
+        // Re-issuing an edited invoice keeps the number it already had.
+        invoiceNumber = invoice.invoiceNumber!;
+      } else if (isReissue && manualNumber) {
+        // Renumbering an edited invoice: the typed number is used as-is.
+        if (!(await numberIsFree(manualNumber))) {
+          throw new Error(`Invoice number ${manualNumber} is already used. Choose another number.`);
+        }
+        invoiceNumber = manualNumber;
+        sequenceNumber = null;
+      } else {
+        if (!input.seriesId) throw new Error("Choose an invoice number series.");
+        const series = await tx.invoiceNumberSeries.findFirst({
+          where: { id: input.seriesId, organisationId: tenant.organisationId, isActive: true }
+        });
+        if (!series) throw new Error("Invoice number series not found.");
+
+        const range = periodRangeForRule(series.resetRule, invoice.invoiceDate, organisation.financialYearStart);
+        const used = await tx.invoice.aggregate({
+          where: {
+            seriesId: series.id,
+            sequenceNumber: { not: null },
+            ...(range ? { invoiceDate: { gte: range.start, lt: range.end } } : {})
+          },
+          _max: { sequenceNumber: true }
+        });
+        const plan = planSequence(series, invoice.invoiceDate, organisation.financialYearStart, used._max.sequenceNumber ?? null);
+        let nextSequence = plan.sequence;
+        const render = (sequence: number) => renderInvoiceNumber({
+          pattern: series.pattern,
+          prefix: series.prefix,
+          sequence,
+          date: invoice.invoiceDate,
+          financialYearStartMonth: organisation.financialYearStart
+        });
+        let autoNumber = render(nextSequence);
+        let numberAvailable = false;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if (await numberIsFree(autoNumber)) {
+            numberAvailable = true;
+            break;
+          }
+          nextSequence += 1;
+          autoNumber = render(nextSequence);
         }
 
-        sequenceNumber += 1;
-        invoiceNumber = render(sequenceNumber);
-      }
-      if (!numberAvailable) {
-        throw new Error("Could not allocate an unused invoice number. Check that the series pattern includes the sequence and the year.");
-      }
-
-      if (plan.advanceSeries) {
-        await tx.invoiceNumberSeries.update({
-          where: { id: series.id },
-          data: { nextSequence: sequenceNumber + 1, lastResetKey: plan.resetKey }
-        });
+        seriesId = series.id;
+        if (manualNumber && manualNumber !== autoNumber) {
+          // A number typed by the user is used as-is and does not move the series counter.
+          if (!(await numberIsFree(manualNumber))) {
+            throw new Error(`Invoice number ${manualNumber} is already used. Choose another number.`);
+          }
+          invoiceNumber = manualNumber;
+          sequenceNumber = null;
+        } else {
+          if (!numberAvailable) {
+            throw new Error("Could not allocate an unused invoice number. Check that the series pattern includes the sequence and the year.");
+          }
+          invoiceNumber = autoNumber;
+          sequenceNumber = nextSequence;
+          if (plan.advanceSeries) {
+            await tx.invoiceNumberSeries.update({
+              where: { id: series.id },
+              data: { nextSequence: nextSequence + 1, lastResetKey: plan.resetKey }
+            });
+          }
+        }
       }
 
       const effectiveTaxMode = resolveTaxMode(invoice.taxMode, {
@@ -713,7 +750,7 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
         where: { id: invoice.id },
         data: {
           status: "issued",
-          seriesId: series.id,
+          seriesId,
           invoiceNumber,
           sequenceNumber,
           financialYear: financialYearLabel(invoice.invoiceDate, organisation.financialYearStart),
@@ -733,12 +770,16 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
         }
       });
 
+      const lastIssueRevision = await tx.invoiceRevision.aggregate({
+        where: { invoiceId: invoice.id },
+        _max: { revisionNumber: true }
+      });
       await tx.invoiceRevision.create({
         data: {
           organisationId: tenant.organisationId,
           invoiceId: invoice.id,
-          revisionNumber: 1,
-          reason: "Initial issue",
+          revisionNumber: (lastIssueRevision._max.revisionNumber ?? 0) + 1,
+          reason: isReissue ? "Re-issued after edit" : "Initial issue",
           snapshot,
           createdById: tenant.userId
         }
@@ -758,10 +799,10 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
         data: {
           organisationId: tenant.organisationId,
           actorUserId: tenant.userId,
-          action: "invoice.issue",
+          action: isReissue ? "invoice.reissue" : "invoice.issue",
           entityType: "invoice",
           entityId: invoice.id,
-          metadata: { invoiceNumber, sequenceNumber, effectiveTaxMode }
+          metadata: { invoiceNumber, sequenceNumber, effectiveTaxMode, manualNumber: Boolean(manualNumber) }
         }
       });
 
@@ -769,6 +810,71 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
   );
+}
+
+/**
+ * Reopens an issued invoice for editing, like "Edit" in standard invoicing apps.
+ * The invoice keeps its number; the issued version is kept in revision history and
+ * re-issuing records a new revision. Not allowed once money or credit notes are attached.
+ */
+export async function reopenInvoiceForEditing(context: TenantContext, input: ReopenInvoiceInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+  assertPermission(tenant.role, "invoices:issue");
+
+  return prisma.$transaction(async (tx) => {
+    const invoice = await tx.invoice.findFirst({
+      where: { id: input.invoiceId, organisationId: tenant.organisationId },
+      include: { items: true }
+    });
+
+    if (!invoice) throw new Error("Invoice not found.");
+    if (invoice.status === "draft") return invoice;
+    if (invoice.status !== "issued") {
+      throw new Error("Only issued invoices without payments can be edited. Use a credit note to correct this invoice.");
+    }
+    if (invoice.paidTotal.gt(0)) throw new Error("This invoice has payments recorded. Reverse them first, or correct it with a credit note.");
+    const issuedCreditNotes = await tx.creditNote.count({
+      where: { organisationId: tenant.organisationId, originalInvoiceId: invoice.id, status: "issued" }
+    });
+    if (issuedCreditNotes > 0 || invoice.creditedTotal.gt(0)) {
+      throw new Error("This invoice has issued credit notes, so it can no longer be edited.");
+    }
+    await assertDateNotLocked(tx, tenant.organisationId, invoice.invoiceDate, "edit this invoice");
+
+    const reopened = await tx.invoice.update({
+      where: { id: invoice.id },
+      data: { status: "draft", updatedById: tenant.userId, version: { increment: 1 } }
+    });
+
+    const lastRevision = await tx.invoiceRevision.aggregate({
+      where: { invoiceId: invoice.id },
+      _max: { revisionNumber: true }
+    });
+    await tx.invoiceRevision.create({
+      data: {
+        organisationId: tenant.organisationId,
+        invoiceId: invoice.id,
+        revisionNumber: (lastRevision._max.revisionNumber ?? 0) + 1,
+        reason: input.reason ? `Opened for editing: ${input.reason}` : "Opened for editing",
+        snapshot: JSON.parse(JSON.stringify(invoice)),
+        createdById: tenant.userId
+      }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "invoice.reopen",
+        entityType: "invoice",
+        entityId: invoice.id,
+        metadata: { invoiceNumber: invoice.invoiceNumber, reason: input.reason ?? null }
+      }
+    });
+
+    return reopened;
+  });
 }
 
 export async function cancelInvoice(context: TenantContext, input: CancelInvoiceInput) {
