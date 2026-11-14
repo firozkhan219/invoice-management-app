@@ -22,6 +22,8 @@ import {
   Wrench
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { BULK_ITEMS_FORM_ID, DeleteSelectedButton, SelectAllItemsCheckbox } from "@/components/items/item-selection";
+import { ProductImageUploader } from "@/components/items/product-image-uploader";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listItemMasters } from "@/lib/items/item-service";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
@@ -68,19 +70,7 @@ export default async function ItemsPage({
 
   return (
     <AppShell>
-      <div className="exports-workspace items-workspace">
-        <aside className="exports-rail">
-          <div className="exports-rail-header">
-            <h2>Exports</h2>
-            <ChevronDown size={16} />
-          </div>
-          <RailLink icon={<Grid2X2 size={16} />} title="Overview" description="Summary of all documents" href="/exports" />
-          <RailLink active icon={<Box size={16} />} title="Items Catalog" description="Manage your product catalog" href="/items" />
-          <RailLink icon={<Layers3 size={16} />} title="Export Documents" description="Invoices, lists, and bank docs" href="/invoices" />
-          <RailLink icon={<Download size={16} />} title="Payment Tracking" description="Monitor export payments" href="/payments" />
-          <RailLink icon={<Tags size={16} />} title="Buyer Details" description="Manage customer information" href="/buyers" />
-        </aside>
-
+      <div className="items-workspace">
         <main className="exports-main">
           <header className="exports-topbar">
             <div>
@@ -104,7 +94,7 @@ export default async function ItemsPage({
                 <summary className="button subtle"><Calculator size={16} /> Order Qty Analyzer</summary>
                 <ToolPanel title="Order Quantity Analyzer" icon={<Calculator size={26} />} description="Reserved for comparing invoice quantities against cartons, units, and package dimensions." />
               </details>
-              <button className="button subtle" type="button" disabled><Trash2 size={16} /> Delete Selected</button>
+              <DeleteSelectedButton />
               <details className="toolbar-menu">
                 <summary className="button subtle"><Download size={16} /> Export</summary>
                 <div className="menu-card">
@@ -177,7 +167,7 @@ export default async function ItemsPage({
                 <table className="table exdocs-items-table">
                   <thead>
                     <tr>
-                      <th><input aria-label="Select all items" type="checkbox" /></th>
+                      <th><SelectAllItemsCheckbox /></th>
                       <th>Image</th>
                       <th>Item Code</th>
                       <th>Name</th>
@@ -192,7 +182,7 @@ export default async function ItemsPage({
                   <tbody>
                     {items.map((item) => (
                       <tr key={item.id}>
-                        <td><input aria-label={`Select ${item.sku || item.name}`} type="checkbox" /></td>
+                        <td><input aria-label={`Select ${item.sku || item.name}`} type="checkbox" name="itemIds" value={item.id} form={BULK_ITEMS_FORM_ID} /></td>
                         <td><ItemThumb item={item} /></td>
                         <td><strong>{item.sku || "Uncoded"}</strong></td>
                         <td>
@@ -205,8 +195,8 @@ export default async function ItemsPage({
                           <span className="soft-chip">{item.category || "Uncategorised"}</span>
                           {item.subcategory ? <span className="muted small-line">{item.subcategory}</span> : null}
                         </td>
-                        <td>{item.saleRate ? `${item.currency} ${item.saleRate.toString()}` : "-"}</td>
-                        <td>{item.weightKg ? `${item.weightKg.toString()}kg` : "-"}</td>
+                        <td>{item.saleRate ? `${item.currency} ${Number(item.saleRate.toString()).toLocaleString("en-IN")}` : "-"}</td>
+                        <td>{item.weightKg ? `${Number(item.weightKg.toString())} kg` : "-"}</td>
                         <td>
                           <form action="/api/items/toggle-active" method="post">
                             <input type="hidden" name="itemId" value={item.id} />
@@ -220,11 +210,7 @@ export default async function ItemsPage({
                         <td>
                           <div className="icon-row">
                             <details className="item-editor">
-                              <summary className="icon-button" title="View and edit item"><Eye size={16} /></summary>
-                              <ItemEditor item={item} units={units} taxRates={taxRates} categories={categories} subcategories={subcategories} mode="edit" />
-                            </details>
-                            <details className="item-editor">
-                              <summary className="icon-button" title="Quick edit item"><Pencil size={16} /></summary>
+                              <summary className="icon-button" title="View and edit product"><Pencil size={16} /></summary>
                               <ItemEditor item={item} units={units} taxRates={taxRates} categories={categories} subcategories={subcategories} mode="edit" />
                             </details>
                             <form action="/api/items/duplicate" method="post">
@@ -251,31 +237,8 @@ export default async function ItemsPage({
           </details>
         </main>
       </div>
+      <form id={BULK_ITEMS_FORM_ID} action="/api/items/delete/bulk" method="post" hidden />
     </AppShell>
-  );
-}
-
-function RailLink({
-  active,
-  description,
-  href,
-  icon,
-  title
-}: {
-  active?: boolean;
-  description: string;
-  href: string;
-  icon: React.ReactNode;
-  title: string;
-}) {
-  return (
-    <a className={`exports-rail-link ${active ? "active" : ""}`} href={href}>
-      {icon}
-      <span>
-        <strong>{title}</strong>
-        <small>{description}</small>
-      </span>
-    </a>
   );
 }
 
@@ -312,7 +275,6 @@ function ItemEditor({
           <strong>{mode === "edit" ? `Edit Item: ${item?.sku || item?.name}` : "Add Item"}</strong>
         </div>
         <div className="toolbar">
-          <button className="button subtle tiny" type="button"><ImagePlus size={15} /> Gallery</button>
           <button className="button subtle tiny" type="reset" form={`item-form-${item?.id || "new"}`}>Reset</button>
         </div>
       </div>
@@ -329,47 +291,23 @@ function ItemEditor({
             <h3><FileSpreadsheet size={17} /> Basic Details</h3>
             <ItemFields item={item} units={units} taxRates={taxRates} categories={categories} subcategories={subcategories} />
           </section>
-          <ItemAccordion title="Category Attributes" icon={<Tags size={17} />}>
-            <div className="form-grid three">
-              <ReadOnlyField label="HSN/SAC" value={item?.hsnSac || "Set in basic details"} />
-              <ReadOnlyField label="Tax Rate" value={item?.taxRate?.name || "None selected"} />
-              <ReadOnlyField label="Manufacturer" value={item?.manufacturer || "Not added"} />
-            </div>
-          </ItemAccordion>
-          <ItemAccordion title="Custom Attributes" icon={<Wrench size={17} />}>
-            <div className="upload-zone compact">Custom attribute fields are reserved for the next data model phase.</div>
-          </ItemAccordion>
-          <ItemAccordion title="Components & Dimensions" icon={<Box size={17} />}>
-            <div className="form-grid three">
-              <ReadOnlyField label="Unit" value={item?.unit?.code || "PCS"} />
-              <ReadOnlyField label="Weight" value={item?.weightKg ? `${item.weightKg.toString()} kg` : "Not added"} />
-              <ReadOnlyField label="Barcode" value={item?.barcode || "Pending"} />
-            </div>
-          </ItemAccordion>
-          <ItemAccordion title="Logistics Summary" icon={<Download size={17} />}>
-            <div className="form-grid three">
-              <ReadOnlyField label="Export status" value={item?.isActive ? "Active for invoices" : "Inactive"} />
-              <ReadOnlyField label="Image status" value={item?.imageStatus || "Pending"} />
-              <ReadOnlyField label="Currency" value={item?.currency || "INR"} />
-            </div>
-          </ItemAccordion>
+          <section className="form-card open">
+            <h3><Box size={17} /> Size, Weight &amp; Packing</h3>
+            <PackingFields item={item} />
+          </section>
+          <section className="form-card open">
+            <h3><Tags size={17} /> Material &amp; Origin</h3>
+            <MaterialFields item={item} />
+          </section>
           <button className="button" type="submit">{mode === "edit" ? "Update Item" : "Save Item"}</button>
         </form>
 
         <aside className="item-image-panel">
           <h3>Product Images</h3>
           {item ? <ItemThumb item={item} /> : <div className="item-thumb">NE</div>}
-          <button className="button subtle" type="button"><Eye size={15} /> View Gallery</button>
+          {item?.imageAssetId ? <a className="button subtle tiny" href={`/api/items/${item.id}/image`} target="_blank" rel="noreferrer"><Eye size={15} /> View full image</a> : null}
           {item ? (
-            <form className="upload-drop" action="/api/items/images" method="post" encType="multipart/form-data">
-              <input type="hidden" name="itemId" value={item.id} />
-              <ImagePlus size={28} />
-              <strong>Upload Product Image</strong>
-              <span>PNG, JPEG, or WebP up to 10MB</span>
-              <input name="file" type="file" accept="image/png,image/jpeg,image/webp" required />
-              <button className="button subtle tiny" type="submit"><Upload size={15} /> Upload</button>
-              <small>{item.imageAssetId ? "Image linked. Upload again to replace." : "0 images uploaded"}</small>
-            </form>
+            <ProductImageUploader itemId={item.id} itemCode={item.sku || ""} hasImage={Boolean(item.imageAssetId)} />
           ) : (
             <div className="upload-drop">
               <ImagePlus size={28} />
@@ -377,12 +315,6 @@ function ItemEditor({
               <span>Image upload is available after the item is created.</span>
             </div>
           )}
-          <div className="smart-fill-card">
-            <Sparkles size={20} />
-            <strong>Smart Auto Fill</strong>
-            <p>Use product images to suggest category, HSN, description, and image matching after upload storage is enabled.</p>
-            <button className="button subtle tiny" type="button" disabled>Auto Fill</button>
-          </div>
         </aside>
       </div>
     </div>
@@ -424,11 +356,11 @@ function ItemFields({
       </datalist>
       <div className="form-grid three">
         <div className="field">
-          <label htmlFor={`sku${suffix}`}>Item Code *</label>
+          <label htmlFor={`sku${suffix}`}>Item Code / SKU</label>
           <input id={`sku${suffix}`} name="sku" defaultValue={item?.sku || ""} placeholder="IND-0001" />
         </div>
         <div className="field">
-          <label htmlFor={`hsnSac${suffix}`}>HSN Code *</label>
+          <label htmlFor={`hsnSac${suffix}`}>HSN Code</label>
           <input id={`hsnSac${suffix}`} name="hsnSac" defaultValue={item?.hsnSac || ""} placeholder="7113" />
         </div>
         <div className="field">
@@ -441,18 +373,17 @@ function ItemFields({
         <input id={`itemName${suffix}`} name="name" defaultValue={item?.name || ""} placeholder="Product display name" required />
       </div>
       <div className="field">
-        <label htmlFor={`description${suffix}`}>Description *</label>
+        <label htmlFor={`description${suffix}`}>Description</label>
         <textarea id={`description${suffix}`} name="description" defaultValue={item?.description || ""} placeholder="Detailed product description..." />
       </div>
       <div className="form-grid three">
         <div className="field">
-          <label htmlFor={`saleRate${suffix}`}>Unit Price *</label>
+          <label htmlFor={`saleRate${suffix}`}>Unit Price</label>
           <input id={`saleRate${suffix}`} name="saleRate" type="number" min="0" step="0.0001" defaultValue={item?.saleRate?.toString() || ""} placeholder="0" />
         </div>
         <div className="field">
           <label htmlFor={`currency${suffix}`}>Currency</label>
-          <input id={`currency${suffix}`} name="currency" defaultValue={item?.currency || "INR"} required />
-          <small>Set in Profile Settings</small>
+          <input id={`currency${suffix}`} name="currency" defaultValue={item?.currency || "INR"} maxLength={3} required />
         </div>
         <div className="field">
           <label htmlFor={`unitId${suffix}`}>Unit</label>
@@ -475,26 +406,8 @@ function ItemFields({
           </select>
         </div>
         <div className="field">
-          <label htmlFor={`weightKg${suffix}`}>Weight KG</label>
-          <input id={`weightKg${suffix}`} name="weightKg" type="number" min="0" step="0.0001" defaultValue={item?.weightKg?.toString() || ""} />
-        </div>
-        <div className="field">
-          <label htmlFor={`barcode${suffix}`}>Barcode</label>
+          <label htmlFor={`barcode${suffix}`}>Barcode / EAN</label>
           <input id={`barcode${suffix}`} name="barcode" defaultValue={item?.barcode || ""} />
-        </div>
-      </div>
-      <div className="form-grid two">
-        <div className="field">
-          <label htmlFor={`imageStatus${suffix}`}>Image status</label>
-          <select id={`imageStatus${suffix}`} name="imageStatus" defaultValue={item?.imageStatus || "pending"}>
-            <option value="pending">Pending</option>
-            <option value="linked">Linked</option>
-            <option value="needs_fix">Needs fix</option>
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor={`imageAssetId${suffix}`}>Image reference</label>
-          <input id={`imageAssetId${suffix}`} name="imageAssetId" defaultValue={item?.imageAssetId || ""} placeholder="Image filename or asset id" />
         </div>
       </div>
       <label className="checkbox">
@@ -565,20 +478,52 @@ function ToolPanel({ description, icon, title }: { description: string; icon: Re
   );
 }
 
-function ItemAccordion({ children, icon, title }: { children: React.ReactNode; icon: React.ReactNode; title: string }) {
+function NumberField({ id, label, name, step = "0.01", value, placeholder }: { id: string; label: string; name: string; step?: string; value?: { toString(): string } | number | null; placeholder?: string }) {
   return (
-    <details className="item-accordion">
-      <summary>{icon}<strong>{title}</strong><ChevronDown size={16} /></summary>
-      <div>{children}</div>
-    </details>
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input id={id} name={name} type="number" min="0" step={step} defaultValue={value == null ? "" : Number(value.toString())} placeholder={placeholder} />
+    </div>
   );
 }
 
-function ReadOnlyField({ label, value }: { label: string; value: string }) {
+function PackingFields({ item }: { item?: ItemForForm }) {
+  const suffix = item ? `-${item.id}` : "-new";
   return (
-    <div className="readonly-field">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <>
+      <div className="form-grid three">
+        <NumberField id={`lengthCm${suffix}`} label="Length (cm)" name="lengthCm" value={item?.lengthCm} />
+        <NumberField id={`widthCm${suffix}`} label="Width (cm)" name="widthCm" value={item?.widthCm} />
+        <NumberField id={`heightCm${suffix}`} label="Height (cm)" name="heightCm" value={item?.heightCm} />
+      </div>
+      <div className="form-grid two">
+        <NumberField id={`weightKg${suffix}`} label="Net weight per piece (kg)" name="weightKg" step="0.0001" value={item?.weightKg} />
+        <NumberField id={`grossWeightKg${suffix}`} label="Gross weight per piece (kg)" name="grossWeightKg" step="0.0001" value={item?.grossWeightKg} />
+      </div>
+      <div className="form-grid two">
+        <NumberField id={`unitsPerCarton${suffix}`} label="Pieces per carton" name="unitsPerCarton" step="1" value={item?.unitsPerCarton} />
+        <NumberField id={`moq${suffix}`} label="Minimum order qty (MOQ)" name="moq" step="1" value={item?.moq} />
+      </div>
+    </>
+  );
+}
+
+function MaterialFields({ item }: { item?: ItemForForm }) {
+  const suffix = item ? `-${item.id}` : "-new";
+  return (
+    <div className="form-grid three">
+      <div className="field">
+        <label htmlFor={`material${suffix}`}>Material</label>
+        <input id={`material${suffix}`} name="material" defaultValue={item?.material || ""} placeholder="Brass, Copper, Wood…" />
+      </div>
+      <div className="field">
+        <label htmlFor={`finish${suffix}`}>Colour / Finish</label>
+        <input id={`finish${suffix}`} name="finish" defaultValue={item?.finish || ""} placeholder="Antique gold, laser print…" />
+      </div>
+      <div className="field">
+        <label htmlFor={`countryOfOrigin${suffix}`}>Country of origin</label>
+        <input id={`countryOfOrigin${suffix}`} name="countryOfOrigin" defaultValue={item?.countryOfOrigin || (item ? "" : "India")} />
+      </div>
     </div>
   );
 }

@@ -150,6 +150,15 @@ export async function createTaxRate(context: TenantContext, input: TaxRateInput)
   });
 }
 
+const decimalKeys = ["saleRate", "weightKg", "grossWeightKg", "lengthCm", "widthCm", "heightCm"] as const;
+
+/** Converts optional numeric inputs to Prisma decimals; blank values clear the column. */
+function decimalFields(input: ItemInput) {
+  return Object.fromEntries(
+    decimalKeys.map((key) => [key, input[key] === undefined ? null : new Prisma.Decimal(input[key])])
+  ) as Record<(typeof decimalKeys)[number], Prisma.Decimal | null>;
+}
+
 export async function createItem(context: TenantContext, input: ItemInput) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "masters:manage");
@@ -178,9 +187,8 @@ export async function createItem(context: TenantContext, input: ItemInput) {
     const item = await tx.item.create({
       data: {
         ...input,
-        saleRate: input.saleRate === undefined ? undefined : new Prisma.Decimal(input.saleRate),
-        weightKg: input.weightKg === undefined ? undefined : new Prisma.Decimal(input.weightKg),
-        imageStatus: input.imageStatus || "pending",
+        ...decimalFields(input),
+        imageStatus: "pending",
         organisationId: tenant.organisationId
       }
     });
@@ -229,21 +237,23 @@ export async function updateItem(context: TenantContext, input: ItemUpdateInput)
     const item = await tx.item.update({
       where: { id: current.id },
       data: {
-        sku: input.sku,
+        sku: input.sku ?? null,
         name: input.name,
-        description: input.description,
-        category: input.category,
-        subcategory: input.subcategory,
-        hsnSac: input.hsnSac,
-        manufacturer: input.manufacturer,
-        barcode: input.barcode,
-        weightKg: input.weightKg === undefined ? null : new Prisma.Decimal(input.weightKg),
-        unitId: input.unitId,
-        taxRateId: input.taxRateId,
-        saleRate: input.saleRate === undefined ? null : new Prisma.Decimal(input.saleRate),
+        description: input.description ?? null,
+        category: input.category ?? null,
+        subcategory: input.subcategory ?? null,
+        hsnSac: input.hsnSac ?? null,
+        manufacturer: input.manufacturer ?? null,
+        barcode: input.barcode ?? null,
+        material: input.material ?? null,
+        finish: input.finish ?? null,
+        countryOfOrigin: input.countryOfOrigin ?? null,
+        unitsPerCarton: input.unitsPerCarton ?? null,
+        moq: input.moq ?? null,
+        ...decimalFields(input),
+        unitId: input.unitId ?? null,
+        taxRateId: input.taxRateId ?? null,
         currency: input.currency,
-        imageAssetId: input.imageAssetId,
-        imageStatus: input.imageStatus || "pending",
         isActive: input.isActive
       }
     });
@@ -287,6 +297,15 @@ export async function duplicateItem(context: TenantContext, input: ItemActionInp
         manufacturer: current.manufacturer,
         barcode: undefined,
         weightKg: current.weightKg,
+        grossWeightKg: current.grossWeightKg,
+        lengthCm: current.lengthCm,
+        widthCm: current.widthCm,
+        heightCm: current.heightCm,
+        material: current.material,
+        finish: current.finish,
+        countryOfOrigin: current.countryOfOrigin,
+        unitsPerCarton: current.unitsPerCarton,
+        moq: current.moq,
         unitId: current.unitId,
         taxRateId: current.taxRateId,
         saleRate: current.saleRate,
@@ -392,6 +411,17 @@ export async function deleteItem(context: TenantContext, input: ItemActionInput)
 
     return { deleted: true, deactivated: false };
   });
+}
+
+export async function deleteItems(context: TenantContext, itemIds: string[]) {
+  let deleted = 0;
+  let deactivated = 0;
+  for (const itemId of itemIds) {
+    const result = await deleteItem(context, { itemId });
+    if (result.deleted) deleted += 1;
+    if (result.deactivated) deactivated += 1;
+  }
+  return { deleted, deactivated };
 }
 
 export async function uploadItemImage(context: TenantContext, input: { itemId: string; file: File }) {

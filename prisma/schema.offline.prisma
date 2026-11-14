@@ -375,6 +375,15 @@ model Item {
   manufacturer   String?
   barcode        String?
   weightKg       Decimal? @map("weight_kg")
+  grossWeightKg  Decimal? @map("gross_weight_kg")
+  lengthCm       Decimal? @map("length_cm")
+  widthCm        Decimal? @map("width_cm")
+  heightCm       Decimal? @map("height_cm")
+  material       String?
+  finish         String?
+  countryOfOrigin String? @map("country_of_origin")
+  unitsPerCarton Int?     @map("units_per_carton")
+  moq            Int?
   unitId         String?  @map("unit_id")
   taxRateId      String?  @map("tax_rate_id")
   saleRate       Decimal? @map("sale_rate")
