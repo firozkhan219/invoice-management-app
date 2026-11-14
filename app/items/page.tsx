@@ -22,7 +22,7 @@ import {
   Wrench
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { BULK_ITEMS_FORM_ID, DeleteSelectedButton, SelectAllItemsCheckbox } from "@/components/items/item-selection";
+import { BULK_ITEMS_FORM_ID, DeleteItemButton, DeleteSelectedButton, SelectAllItemsCheckbox } from "@/components/items/item-selection";
 import { ProductImageUploader } from "@/components/items/product-image-uploader";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listItemMasters } from "@/lib/items/item-service";
@@ -219,7 +219,7 @@ export default async function ItemsPage({
                             </form>
                             <form action="/api/items/delete" method="post">
                               <input type="hidden" name="itemId" value={item.id} />
-                              <button className="icon-button danger" title="Delete unused item" type="submit"><Trash2 size={16} /></button>
+                              <DeleteItemButton label={item.sku || item.name} />
                             </form>
                           </div>
                         </td>

@@ -10,10 +10,8 @@ export async function POST(request: Request) {
       const itemIds = formData.getAll("itemIds").filter((id): id is string => typeof id === "string" && uuid.test(id));
       if (itemIds.length === 0) throw new FormError("Select at least one product to delete.");
 
-      const result = await deleteItems(context, itemIds);
-      const parts = [`${result.deleted} deleted`];
-      if (result.deactivated) parts.push(`${result.deactivated} used on invoices, so marked inactive`);
-      return withFlash("/items", "notice", `Products: ${parts.join(", ")}.`);
+      const { deleted } = await deleteItems(context, itemIds);
+      return withFlash("/items", "notice", `${deleted} product${deleted === 1 ? "" : "s"} deleted.`);
     }
   });
 }

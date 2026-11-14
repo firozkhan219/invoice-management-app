@@ -67,11 +67,29 @@ export function DeleteSelectedButton() {
       form={BULK_ITEMS_FORM_ID}
       disabled={checked === 0}
       onClick={(event) => {
-        const message = `Delete ${checked} selected product${checked === 1 ? "" : "s"}? Products already used on invoices will be marked inactive instead.`;
+        const message = `Delete ${checked} selected product${checked === 1 ? "" : "s"}? Existing invoices and packing lists keep their copy of these products. This cannot be undone.`;
         if (!window.confirm(message)) event.preventDefault();
       }}
     >
       <Trash2 size={16} /> Delete Selected{checked ? ` (${checked})` : ""}
+    </button>
+  );
+}
+
+/** Row-level delete button: asks for confirmation because deletion is permanent. */
+export function DeleteItemButton({ label }: { label: string }) {
+  return (
+    <button
+      className="icon-button danger"
+      title="Delete product"
+      type="submit"
+      onClick={(event) => {
+        if (!window.confirm(`Delete ${label}? Existing invoices and packing lists keep their copy of this product. This cannot be undone.`)) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <Trash2 size={16} />
     </button>
   );
 }
