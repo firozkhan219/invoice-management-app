@@ -363,6 +363,10 @@ export async function toggleItemActive(context: TenantContext, input: ItemAction
   });
 }
 
+/**
+ * Permanently deletes a product. Invoice, packing list and credit note lines keep their own copy
+ * of code, description, HSN, quantity and rate; their link to the product is cleared (ON DELETE SET NULL).
+ */
 export async function deleteItem(context: TenantContext, input: ItemActionInput) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "masters:manage");
@@ -370,31 +374,11 @@ export async function deleteItem(context: TenantContext, input: ItemActionInput)
   return prisma.$transaction(async (tx) => {
     const current = await tx.item.findFirst({
       where: { id: input.itemId, organisationId: tenant.organisationId },
-      include: { _count: { select: { invoiceItems: true } } }
+      include: { _count: { select: { invoiceItems: true, packingListLines: true } } }
     });
 
     if (!current) {
       throw new Error("Item not found.");
-    }
-
-    if (current._count.invoiceItems > 0) {
-      await tx.item.update({
-        where: { id: current.id },
-        data: { isActive: false }
-      });
-
-      await tx.auditLog.create({
-        data: {
-          organisationId: tenant.organisationId,
-          actorUserId: tenant.userId,
-          action: "item.deactivate_used",
-          entityType: "item",
-          entityId: current.id,
-          metadata: { invoiceItemCount: current._count.invoiceItems }
-        }
-      });
-
-      return { deleted: false, deactivated: true };
     }
 
     await tx.item.delete({ where: { id: current.id } });
@@ -405,23 +389,27 @@ export async function deleteItem(context: TenantContext, input: ItemActionInput)
         actorUserId: tenant.userId,
         action: "item.delete",
         entityType: "item",
-        entityId: current.id
+        entityId: current.id,
+        metadata: {
+          sku: current.sku,
+          name: current.name,
+          invoiceLineCount: current._count.invoiceItems,
+          packingLineCount: current._count.packingListLines
+        }
       }
     });
 
-    return { deleted: true, deactivated: false };
+    return { deleted: true, usedOnDocuments: current._count.invoiceItems + current._count.packingListLines > 0 };
   });
 }
 
 export async function deleteItems(context: TenantContext, itemIds: string[]) {
   let deleted = 0;
-  let deactivated = 0;
   for (const itemId of itemIds) {
-    const result = await deleteItem(context, { itemId });
-    if (result.deleted) deleted += 1;
-    if (result.deactivated) deactivated += 1;
+    await deleteItem(context, { itemId });
+    deleted += 1;
   }
-  return { deleted, deactivated };
+  return { deleted };
 }
 
 export async function uploadItemImage(context: TenantContext, input: { itemId: string; file: File }) {
