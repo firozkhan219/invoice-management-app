@@ -66,8 +66,14 @@ export const invoiceItemDeleteSchema = z.object({
 
 export const issueInvoiceSchema = z.object({
   invoiceId: z.string().uuid(),
-  seriesId: z.string().uuid(),
+  seriesId: z.string().uuid().optional().or(z.literal("")).transform((value) => value || undefined),
+  invoiceNumber: z.string().trim().max(60).regex(/^[A-Za-z0-9/._-]*$/, "use letters, numbers, / - _ or . only").optional(),
   expectedVersion: z.coerce.number().int().min(1)
+});
+
+export const reopenInvoiceSchema = z.object({
+  invoiceId: z.string().uuid(),
+  reason: z.string().trim().max(500).optional().transform((value) => value || undefined)
 });
 
 export const cancelInvoiceSchema = z.object({
@@ -84,5 +90,6 @@ export type InvoiceItemInput = z.infer<typeof invoiceItemSchema>;
 export type InvoiceItemUpdateInput = z.infer<typeof invoiceItemUpdateSchema>;
 export type InvoiceItemDeleteInput = z.infer<typeof invoiceItemDeleteSchema>;
 export type IssueInvoiceInput = z.infer<typeof issueInvoiceSchema>;
+export type ReopenInvoiceInput = z.infer<typeof reopenInvoiceSchema>;
 export type CancelInvoiceInput = z.infer<typeof cancelInvoiceSchema>;
 export type DeleteDraftInvoiceInput = z.infer<typeof deleteDraftInvoiceSchema>;

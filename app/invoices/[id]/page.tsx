@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AlertTriangle, Ban, CheckCircle2, CreditCard, FileClock, FileText, PackageCheck, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Ban, CheckCircle2, CreditCard, FileClock, FileText, PackageCheck, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
@@ -10,6 +10,7 @@ import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
 import { DraftFields, isoDate } from "../draft-fields";
 import { formatMoney, formatAmount, formatQuantity } from "@/lib/format";
+import { IssueNumberFields } from "./issue-number-fields";
 
 export default async function InvoiceEditorPage({
   params,
@@ -25,7 +26,7 @@ export default async function InvoiceEditorPage({
   const { id } = await params;
   const invoice = await getInvoice(context, id);
   if (!invoice) redirect("/invoices");
-  await searchParams;
+  const query = await searchParams;
   const mayCreate = hasPermission(context.role, "invoices:create");
   const mayIssue = hasPermission(context.role, "invoices:issue");
   const mayCancel = hasPermission(context.role, "invoices:cancel");
@@ -44,6 +45,8 @@ export default async function InvoiceEditorPage({
   const canCancel = mayCancel && invoice.status === "issued" && invoice.paidTotal.lte(0) && invoice.creditedTotal.lte(0);
   const canIssue = Boolean(mayIssue && invoice.companyId && invoice.buyerId && invoice.items.length > 0 && invoice.grandTotal.gt(0) && seriesList.length > 0);
   const paymentHref = `/payments?invoiceId=${invoice.id}`;
+  const canReopen = mayCreate && mayIssue && invoice.status === "issued" && invoice.paidTotal.lte(0) && invoice.creditedTotal.lte(0) && issuedCreditNotes.length === 0;
+  const editOpen = query?.edit === "1";
   const statusLabel = invoice.status.replace("_", " ");
   const readiness = invoiceReadiness({
     hasCompany: Boolean(invoice.companyId),
@@ -68,132 +71,133 @@ export default async function InvoiceEditorPage({
 
   return (
     <AppShell>
-      <header className="page-header">
-        <div>
-          <p className="muted">Invoice workspace</p>
-          <h1>{invoice.invoiceNumber || "Unnumbered draft"}</h1>
-          <div className="meta-row">
+      <header className="invoice-head">
+        <div className="invoice-head-title">
+          <Link className="back-link" href="/invoices"><ArrowLeft size={15} /> Invoices</Link>
+          <h1>
+            {invoice.invoiceNumber || "Draft invoice"}
             <span className={`status-badge ${invoice.status}`}>{statusLabel}</span>
-            <span>Version {invoice.version}</span>
-            <span>{invoice.invoiceDate.toISOString().slice(0, 10)}</span>
-          </div>
+          </h1>
+          <p className="muted">
+            {invoice.buyer?.displayName || "No buyer yet"} · {formatDate(invoice.invoiceDate)} · {formatMoney(invoice.currency, invoice.grandTotal)}
+          </p>
         </div>
         <div className="toolbar">
-          <Link className="button subtle" href="/invoices">Invoices</Link>
+          {isDraft && editorData ? (
+            <Link className="button subtle" href={`/invoices/${invoice.id}?edit=1#edit-invoice`}><Pencil size={16} /> Edit invoice</Link>
+          ) : null}
+          {canReopen ? (
+            <form action="/api/invoices/reopen" method="post">
+              <input type="hidden" name="invoiceId" value={invoice.id} />
+              <button className="button subtle" type="submit"><Pencil size={16} /> Edit invoice</button>
+            </form>
+          ) : null}
           {canOpenPdf ? (
-            <a className="button" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer">
-              <FileText size={18} />
-              Open PDF
-            </a>
+            <a className="button subtle" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer"><FileText size={16} /> PDF</a>
           ) : null}
           {canRecordPayment ? (
-            <Link className="button subtle" href={paymentHref}>
-              <CreditCard size={18} />
-              Record payment
-            </Link>
+            <Link className="button subtle" href={paymentHref}><CreditCard size={16} /> Record payment</Link>
+          ) : null}
+          {isDraft && mayIssue && (seriesList.length > 0 || invoice.invoiceNumber) ? (
+            <a className="button" href="#issue-invoice"><Send size={16} /> {invoice.invoiceNumber ? "Re-issue" : "Issue"}</a>
           ) : null}
         </div>
       </header>
 
-      <div className="summary-grid">
-        <div className="stat">
-          <span className="muted">Grand total</span>
-          <strong>{formatMoney(invoice.currency, invoice.grandTotal)}</strong>
-        </div>
-        <div className="stat">
-          <span className="muted">Paid</span>
-          <strong>{formatMoney(invoice.currency, invoice.paidTotal)}</strong>
-        </div>
-        {invoice.creditedTotal.gt(0) ? (
-          <div className="stat">
-            <span className="muted">Credited</span>
-            <strong>{formatMoney(invoice.currency, invoice.creditedTotal)}</strong>
-          </div>
-        ) : null}
-        <div className="stat">
-          <span className="muted">Balance</span>
-          <strong>{formatMoney(invoice.currency, invoice.balanceDue)}</strong>
-        </div>
-      </div>
-
-      <section className="document-command-panel">
-        <div>
-          <p className="muted">{isDraft ? "Before issuing" : "Invoice status"}</p>
-          <h2>{readiness.ready === readiness.total ? (isDraft ? "Ready to issue" : "All details complete") : `${readiness.ready} of ${readiness.total} details complete`}</h2>
-        </div>
-        <div className="readiness-list">
+      {isDraft && readiness.ready < readiness.total ? (
+        <div className="readiness-strip">
+          <strong>{readiness.ready} of {readiness.total} ready</strong>
           {readiness.items.map((item) => (
             <span className={item.done ? "ready-check done" : "ready-check"} key={item.label}>
-              {item.done ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+              {item.done ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
               {item.label}
             </span>
           ))}
         </div>
-        <div className="document-link-grid">
-          {canOpenPdf ? (
-            <a className="document-link-card primary" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer">
-              <FileText size={18} />
-              <span><strong>Invoice PDF</strong><small>Commercial invoice output</small></span>
-            </a>
-          ) : (
-            <span className="document-link-card disabled">
-              <FileText size={18} />
-              <span><strong>Invoice PDF</strong><small>Available after issue</small></span>
-            </span>
-          )}
-          {issuedPackingLists.length > 0 ? issuedPackingLists.map((packingList) => (
-            <a className="document-link-card" href={`/api/packing-lists/${packingList.id}/pdf`} target="_blank" rel="noreferrer" key={packingList.id}>
-              <PackageCheck size={18} />
-              <span><strong>Packing List</strong><small>{packingList.packingListNumber || "Issued document"}</small></span>
-            </a>
-          )) : canCreatePackingList ? (
-            <Link className="document-link-card" href={`/packing-lists/new?invoiceId=${invoice.id}`}>
-              <PackageCheck size={18} />
-              <span><strong>Create Packing List</strong><small>Copy from this invoice</small></span>
-            </Link>
-          ) : null}
-          {issuedCreditNotes.map((creditNote) => (
-            <a className="document-link-card" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer" key={creditNote.id}>
-              <Undo2 size={18} />
-              <span><strong>Credit Note</strong><small>{creditNote.creditNoteNumber || "Issued correction"}</small></span>
-            </a>
-          ))}
-        </div>
-      </section>
+      ) : null}
+      {isDraft && invoice.invoiceNumber ? (
+        <p className="notice">This invoice is open for editing. It keeps number {invoice.invoiceNumber}; issue it again to update the PDF.</p>
+      ) : null}
 
       <div className="grid two-column document-layout">
         <div className="grid">
-          <section className="panel">
-            <div className="section-title">
-              <div>
-                <p className="muted">Snapshot</p>
-                <h2>Invoice overview</h2>
-              </div>
-            </div>
-            <table className="table compact">
-            <tbody>
-              <tr><th>Buyer</th><td>{invoice.buyer?.displayName || "-"}</td></tr>
-              <tr><th>Company</th><td>{invoice.company?.legalName || "-"}</td></tr>
-              <tr><th>Bank account</th><td>{invoice.bankAccount ? `${invoice.bankAccount.bankName} - ${invoice.bankAccount.accountNumberLast4}` : "-"}</td></tr>
-              <tr><th>Due date</th><td>{invoice.dueDate ? invoice.dueDate.toISOString().slice(0, 10) : "-"}</td></tr>
-              <tr><th>Buyer order</th><td>{invoice.buyerOrderNumber || "-"}</td></tr>
-              <tr><th>Exporter reference</th><td>{invoice.exporterReference || "-"}</td></tr>
-              <tr><th>Tax mode</th><td>{invoice.taxMode.replace("_", " ")}{invoice.cgstTotal.gt(0) ? " → CGST + SGST" : invoice.igstTotal.gt(0) ? " → IGST" : ""}</td></tr>
-              <tr><th>Place of supply</th><td>{invoice.placeOfSupplyStateCode || invoice.shippingAddress?.stateCode || invoice.billingAddress?.stateCode || "-"}</td></tr>
-              <tr><th>Subtotal</th><td>{formatAmount(invoice.subtotal)}</td></tr>
-              {/* Only show adjustments and taxes that actually apply, to keep the overview short. */}
-              {invoice.invoiceDiscount.isZero() ? null : <tr><th>Invoice discount</th><td>- {formatAmount(invoice.invoiceDiscount)}</td></tr>}
-              {invoice.otherCharges.isZero() ? null : <tr><th>Other charges</th><td>{formatAmount(invoice.otherCharges)}</td></tr>}
-              {invoice.igstTotal.isZero() ? null : <tr><th>IGST</th><td>{formatAmount(invoice.igstTotal)}</td></tr>}
-              {invoice.cgstTotal.isZero() ? null : <tr><th>CGST</th><td>{formatAmount(invoice.cgstTotal)}</td></tr>}
-              {invoice.sgstTotal.isZero() ? null : <tr><th>SGST</th><td>{formatAmount(invoice.sgstTotal)}</td></tr>}
-              {invoice.roundOff.isZero() ? null : <tr><th>Round off</th><td>{formatAmount(invoice.roundOff)}</td></tr>}
-              <tr className="total-row"><th>Grand total</th><td>{formatMoney(invoice.currency, invoice.grandTotal)}</td></tr>
-              <tr><th>Paid total</th><td>{formatMoney(invoice.currency, invoice.paidTotal)}</td></tr>
-              <tr><th>Balance due</th><td>{formatMoney(invoice.currency, invoice.balanceDue)}</td></tr>
-            </tbody>
+          <section className="panel invoice-summary">
+            <dl className="detail-grid">
+              <DetailItem label="Bill to" value={invoice.buyer?.displayName} />
+              <DetailItem label="Company" value={invoice.company?.legalName} />
+              <DetailItem label="Invoice date" value={formatDate(invoice.invoiceDate)} />
+              <DetailItem label="Due date" value={invoice.dueDate ? formatDate(invoice.dueDate) : null} />
+              <DetailItem label="Bank" value={invoice.bankAccount ? `${invoice.bankAccount.bankName} ··${invoice.bankAccount.accountNumberLast4}` : null} />
+              <DetailItem label="Tax" value={`${taxLabel(invoice.taxMode)}${invoice.taxMode === "automatic" ? (invoice.cgstTotal.gt(0) ? " (CGST + SGST)" : invoice.igstTotal.gt(0) ? " (IGST)" : "") : ""}`} />
+              <DetailItem label="Place of supply" value={invoice.placeOfSupplyStateCode || invoice.shippingAddress?.stateCode || invoice.billingAddress?.stateCode} />
+              <DetailItem label="Currency" value={invoice.currency} />
+              {invoice.buyerOrderNumber ? <DetailItem label="Buyer order" value={invoice.buyerOrderNumber} /> : null}
+              {invoice.exporterReference ? <DetailItem label="Exporter ref." value={invoice.exporterReference} /> : null}
+              {invoice.portOfLoading ? <DetailItem label="Port of loading" value={invoice.portOfLoading} /> : null}
+              {invoice.portOfDischarge ? <DetailItem label="Port of discharge" value={invoice.portOfDischarge} /> : null}
+              {invoice.finalDestination ? <DetailItem label="Destination" value={invoice.finalDestination} /> : null}
+            </dl>
+            <table className="totals-box">
+              <tbody>
+                <tr><th>Subtotal</th><td>{formatAmount(invoice.subtotal)}</td></tr>
+                {/* Only adjustments and taxes that actually apply. */}
+                {invoice.invoiceDiscount.isZero() ? null : <tr><th>Discount</th><td>- {formatAmount(invoice.invoiceDiscount)}</td></tr>}
+                {invoice.otherCharges.isZero() ? null : <tr><th>Other charges</th><td>{formatAmount(invoice.otherCharges)}</td></tr>}
+                {invoice.igstTotal.isZero() ? null : <tr><th>IGST</th><td>{formatAmount(invoice.igstTotal)}</td></tr>}
+                {invoice.cgstTotal.isZero() ? null : <tr><th>CGST</th><td>{formatAmount(invoice.cgstTotal)}</td></tr>}
+                {invoice.sgstTotal.isZero() ? null : <tr><th>SGST</th><td>{formatAmount(invoice.sgstTotal)}</td></tr>}
+                {invoice.roundOff.isZero() ? null : <tr><th>Round off</th><td>{formatAmount(invoice.roundOff)}</td></tr>}
+                <tr className="grand"><th>Total</th><td>{formatMoney(invoice.currency, invoice.grandTotal)}</td></tr>
+                {isDraft ? null : <tr><th>Paid</th><td>{formatMoney(invoice.currency, invoice.paidTotal)}</td></tr>}
+                {invoice.creditedTotal.gt(0) ? <tr><th>Credited</th><td>{formatMoney(invoice.currency, invoice.creditedTotal)}</td></tr> : null}
+                {isDraft ? null : <tr className="balance"><th>Balance due</th><td>{formatMoney(invoice.currency, invoice.balanceDue)}</td></tr>}
+              </tbody>
             </table>
           </section>
+
+          {isDraft && editorData ? (
+            <details className="panel edit-panel" id="edit-invoice" open={editOpen}>
+              <summary><Pencil size={16} /> <strong>Edit invoice details</strong><span className="muted">Buyer, dates, addresses, shipping and notes</span></summary>
+              <form className="form" action="/api/invoices" method="post">
+                <input type="hidden" name="invoiceId" value={invoice.id} />
+                <input type="hidden" name="version" value={invoice.version} />
+              <DraftFields
+                  editor={editorData}
+                  values={{
+                    companyId: invoice.companyId,
+                    buyerId: invoice.buyerId,
+                    consigneeBuyerId: invoice.consigneeBuyerId,
+                    billingAddressId: invoice.billingAddressId,
+                    shippingAddressId: invoice.shippingAddressId,
+                    bankAccountId: invoice.bankAccountId,
+                    invoiceDate: isoDate(invoice.invoiceDate),
+                    dueDate: isoDate(invoice.dueDate),
+                    currency: invoice.currency,
+                    placeOfSupplyStateCode: invoice.placeOfSupplyStateCode,
+                    taxMode: invoice.taxMode,
+                    buyerOrderNumber: invoice.buyerOrderNumber,
+                    buyerOrderDate: isoDate(invoice.buyerOrderDate),
+                    exporterReference: invoice.exporterReference,
+                    preCarriageBy: invoice.preCarriageBy,
+                    placeOfReceipt: invoice.placeOfReceipt,
+                    vesselFlightNo: invoice.vesselFlightNo,
+                    portOfLoading: invoice.portOfLoading,
+                    portOfDischarge: invoice.portOfDischarge,
+                    finalDestination: invoice.finalDestination,
+                    termsOfDelivery: invoice.termsOfDelivery,
+                    notes: invoice.notes,
+                    declaration: invoice.declaration,
+                    invoiceDiscount: invoice.invoiceDiscount.toString(),
+                    otherCharges: invoice.otherCharges.toString()
+                  }}
+                />
+                <div className="toolbar start">
+                  <button className="button" type="submit"><Save size={16} /> Save changes</button>
+                  <Link className="button subtle" href={`/invoices/${invoice.id}`}>Close</Link>
+                </div>
+              </form>
+            </details>
+          ) : null}
 
           <section className="panel">
             <div className="section-title">
@@ -298,6 +302,41 @@ export default async function InvoiceEditorPage({
               </table>
               </div>
             )}
+            {isDraft && editorData ? (
+              <details className="add-line" open={invoice.items.length === 0}>
+                <summary><Plus size={16} /> Add line item</summary>
+                <form className="form" action="/api/invoices/items" method="post">
+                  <input type="hidden" name="invoiceId" value={invoice.id} />
+                  <input type="hidden" name="expectedVersion" value={invoice.version} />
+              <div className="field">
+                    <label htmlFor="itemId">Catalog item</label>
+                    <select id="itemId" name="itemId" defaultValue="">
+                      <option value="">Manual line</option>
+                      {editorData.masterItems.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}{item.saleRate ? ` - ${item.currency} ${item.saleRate.toString()}` : ""}{item.hsnSac ? ` - HSN ${item.hsnSac}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="muted">With a catalog item, blank description, HSN, unit, rate and GST are filled from the item.</p>
+                  </div>
+                  <div className="field"><label htmlFor="description">Description</label><textarea id="description" name="description" /></div>
+                  <div className="form-grid">
+                    <div className="field"><label htmlFor="hsnSac">HSN/SAC</label><input id="hsnSac" name="hsnSac" maxLength={20} /></div>
+                    <div className="field"><label htmlFor="unitCode">Unit</label><input id="unitCode" name="unitCode" /></div>
+                  </div>
+                  <div className="form-grid">
+                    <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" type="number" step="0.0001" min="0.0001" required /></div>
+                    <div className="field"><label htmlFor="rate">Rate</label><input id="rate" name="rate" type="number" step="0.0001" min="0" /></div>
+                  </div>
+                  <div className="form-grid">
+                    <div className="field"><label htmlFor="gstRate">GST %</label><input id="gstRate" name="gstRate" type="number" step="0.0001" min="0" max="100" /></div>
+                    <div className="field"><label htmlFor="discountAmount">Line discount</label><input id="discountAmount" name="discountAmount" type="number" step="0.01" min="0" defaultValue="0" /></div>
+                  </div>
+                  <button className="button" type="submit"><Plus size={16} /> Add line</button>
+                </form>
+              </details>
+            ) : null}
           </section>
 
           <section className="panel">
@@ -389,39 +428,49 @@ export default async function InvoiceEditorPage({
           ) : null}
 
           {isDraft && mayIssue ? (
-            <section className="panel">
+            <section className="panel" id="issue-invoice">
               <div className="section-title">
                 <div>
                   <p className="muted">Finalise</p>
-                  <h2>Issue invoice</h2>
+                  <h2>{invoice.invoiceNumber ? "Re-issue invoice" : "Issue invoice"}</h2>
                 </div>
                 <Send size={20} />
               </div>
               {issueRequirements.length > 0 ? (
                 <p className="notice error">Before issuing: {issueRequirements.join(", ")}.</p>
               ) : null}
-              {seriesList.length === 0 ? (
-                <p className="muted">Create an invoice number series in Settings first.</p>
+              {seriesList.length === 0 && !invoice.invoiceNumber ? (
+                <p className="muted">Create an invoice number series in <Link href="/settings">Settings</Link> first.</p>
               ) : (
                 <form className="form" action="/api/invoices/issue" method="post">
                   <input type="hidden" name="invoiceId" value={invoice.id} />
                   <input type="hidden" name="expectedVersion" value={invoice.version} />
-                  <div className="field">
-                    <label htmlFor="seriesId">Number series</label>
-                    <select id="seriesId" name="seriesId" required>
-                      {seriesList.map((series) => (
-                        <option key={series.id} value={series.id}>
-                          {series.name} - next {previewInvoiceNumber(series, invoice.invoiceDate, issueOptions!.organisation.financialYearStart)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <IssueNumberFields
+                    currentNumber={invoice.invoiceNumber}
+                    series={seriesList.map((series) => ({
+                      id: series.id,
+                      name: series.name,
+                      preview: previewInvoiceNumber(series, invoice.invoiceDate, issueOptions!.organisation.financialYearStart)
+                    }))}
+                  />
                   <button className="button" type="submit" disabled={!canIssue}>
                     <Send size={18} />
-                    Issue invoice
+                    {invoice.invoiceNumber ? "Re-issue invoice" : "Issue invoice"}
                   </button>
                 </form>
               )}
+            </section>
+          ) : null}
+
+          {!isDraft && !canReopen && mayCreate && invoice.status !== "cancelled" ? (
+            <section className="panel">
+              <div className="section-title">
+                <div>
+                  <p className="muted">Editing</p>
+                  <h2>Locked for editing</h2>
+                </div>
+              </div>
+              <p className="muted">This invoice has payments or credit notes, so it can&apos;t be edited directly. Correct it with a credit note{invoice.paidTotal.gt(0) ? ", or reverse the payments first" : ""}.</p>
             </section>
           ) : null}
 
@@ -506,128 +555,27 @@ export default async function InvoiceEditorPage({
             </section>
           ) : null}
 
-          {isDraft && editorData ? (
-          <>
+          {isDraft && editorData && !invoice.invoiceNumber ? (
           <section className="panel">
-            <div className="section-title">
-              <div>
-                <p className="muted">Draft control</p>
-                <h2>Delete draft</h2>
-              </div>
-              <Trash2 size={20} />
-            </div>
-            <form className="form" action="/api/invoices/delete" method="post">
-              <input type="hidden" name="invoiceId" value={invoice.id} />
-              <label className="checkbox">
-                <input type="checkbox" name="confirm" required /> Permanently delete this draft
-              </label>
-              <button className="button danger" type="submit">
-                <Trash2 size={18} />
-                Delete draft
-              </button>
-            </form>
-          </section>
-          <section className="panel">
-            <div className="section-title">
-              <div>
-                <p className="muted">Draft details</p>
-                <h2>Update invoice</h2>
-              </div>
-              <Save size={20} />
-            </div>
-            <form className="form" action="/api/invoices" method="post">
-              <input type="hidden" name="invoiceId" value={invoice.id} />
-              <input type="hidden" name="version" value={invoice.version} />
-              <DraftFields
-                editor={editorData}
-                values={{
-                  companyId: invoice.companyId,
-                  buyerId: invoice.buyerId,
-                  consigneeBuyerId: invoice.consigneeBuyerId,
-                  billingAddressId: invoice.billingAddressId,
-                  shippingAddressId: invoice.shippingAddressId,
-                  bankAccountId: invoice.bankAccountId,
-                  invoiceDate: isoDate(invoice.invoiceDate),
-                  dueDate: isoDate(invoice.dueDate),
-                  currency: invoice.currency,
-                  placeOfSupplyStateCode: invoice.placeOfSupplyStateCode,
-                  taxMode: invoice.taxMode,
-                  buyerOrderNumber: invoice.buyerOrderNumber,
-                  buyerOrderDate: isoDate(invoice.buyerOrderDate),
-                  exporterReference: invoice.exporterReference,
-                  preCarriageBy: invoice.preCarriageBy,
-                  placeOfReceipt: invoice.placeOfReceipt,
-                  vesselFlightNo: invoice.vesselFlightNo,
-                  portOfLoading: invoice.portOfLoading,
-                  portOfDischarge: invoice.portOfDischarge,
-                  finalDestination: invoice.finalDestination,
-                  termsOfDelivery: invoice.termsOfDelivery,
-                  notes: invoice.notes,
-                  declaration: invoice.declaration,
-                  invoiceDiscount: invoice.invoiceDiscount.toString(),
-                  otherCharges: invoice.otherCharges.toString()
-                }}
-              />
-              <button className="button" type="submit">
-                <Save size={18} />
-                Save draft
-              </button>
-            </form>
-          </section>
-          <section className="panel">
-            <div className="section-title">
-              <div>
-                <p className="muted">Invoice rows</p>
-                <h2>Add line item</h2>
-              </div>
-              <Plus size={20} />
-            </div>
-            <form className="form" action="/api/invoices/items" method="post">
-              <input type="hidden" name="invoiceId" value={invoice.id} />
-              <input type="hidden" name="expectedVersion" value={invoice.version} />
-              <div className="field">
-                <label htmlFor="itemId">Catalog item</label>
-                <select id="itemId" name="itemId" defaultValue="">
-                  <option value="">Manual line</option>
-                  {editorData.masterItems.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}{item.saleRate ? ` - ${item.currency} ${item.saleRate.toString()}` : ""}{item.hsnSac ? ` - HSN ${item.hsnSac}` : ""}
-                    </option>
-                  ))}
-                </select>
-                <p className="muted">With a catalog item, blank description, HSN, unit, rate and GST are filled from the item.</p>
-              </div>
-              <div className="field"><label htmlFor="description">Description</label><textarea id="description" name="description" /></div>
-              <div className="form-grid">
-                <div className="field"><label htmlFor="hsnSac">HSN/SAC</label><input id="hsnSac" name="hsnSac" maxLength={20} /></div>
-                <div className="field"><label htmlFor="unitCode">Unit</label><input id="unitCode" name="unitCode" /></div>
-              </div>
-              <div className="form-grid">
-                <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" type="number" step="0.0001" min="0.0001" required /></div>
-                <div className="field"><label htmlFor="rate">Rate</label><input id="rate" name="rate" type="number" step="0.0001" min="0" /></div>
-              </div>
-              <div className="form-grid">
-                <div className="field"><label htmlFor="gstRate">GST %</label><input id="gstRate" name="gstRate" type="number" step="0.0001" min="0" max="100" /></div>
-                <div className="field"><label htmlFor="discountAmount">Line discount</label><input id="discountAmount" name="discountAmount" type="number" step="0.01" min="0" defaultValue="0" /></div>
-              </div>
-              <button className="button" type="submit">
-                <Plus size={18} />
-                Add line
-              </button>
-            </form>
-          </section>
-          </>
-          ) : isDraft ? null : (
-            <section className="panel">
               <div className="section-title">
                 <div>
-                  <p className="muted">Locked</p>
-                  <h2>Draft editing closed</h2>
+                  <p className="muted">Draft control</p>
+                  <h2>Delete draft</h2>
                 </div>
+                <Trash2 size={20} />
               </div>
-              <p className="muted">This invoice has been issued, so changes must be handled through payments, credit notes, cancellation, or a new invoice.</p>
+              <form className="form" action="/api/invoices/delete" method="post">
+                <input type="hidden" name="invoiceId" value={invoice.id} />
+                <label className="checkbox">
+                  <input type="checkbox" name="confirm" required /> Permanently delete this draft
+                </label>
+                <button className="button danger" type="submit">
+                  <Trash2 size={18} />
+                  Delete draft
+                </button>
+              </form>
             </section>
-          )}
+          ) : null}
         </aside>
       </div>
     </AppShell>
@@ -683,4 +631,28 @@ function invoiceReadiness(input: {
     ready: items.filter((item) => item.done).length,
     total: items.length
   };
+}
+
+function DetailItem({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value || "—"}</dd>
+    </div>
+  );
+}
+
+function formatDate(date: Date) {
+  return date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+function taxLabel(taxMode: string) {
+  const labels: Record<string, string> = {
+    automatic: "Automatic GST",
+    igst: "IGST",
+    cgst_sgst: "CGST + SGST",
+    zero_rated_export: "Zero-rated export",
+    no_tax: "No tax"
+  };
+  return labels[taxMode] || taxMode.replace(/_/g, " ");
 }
