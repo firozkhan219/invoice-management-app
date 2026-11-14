@@ -1299,12 +1299,12 @@ button:disabled {
 }
 
 .items-workspace {
-  background: #f8fafc;
-  border: 1px solid var(--border);
   display: grid;
-  grid-template-columns: 256px minmax(0, 1fr);
-  margin: -8px;
-  min-height: calc(100vh - 48px);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.items-workspace .exports-main {
+  padding: 0 0 32px;
 }
 
 .exports-rail {
@@ -1739,7 +1739,7 @@ button:disabled {
 .item-editor-grid {
   display: grid;
   gap: 20px;
-  grid-template-columns: minmax(0, 1fr) 156px;
+  grid-template-columns: minmax(0, 1fr) 300px;
 }
 
 .item-detail-form {
@@ -1831,6 +1831,66 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
   margin: 0;
+}
+
+label.upload-drop {
+  cursor: pointer;
+}
+
+label.upload-drop:hover {
+  border-color: var(--primary);
+  background: #f8fbff;
+}
+
+.image-uploader {
+  display: grid;
+  gap: 10px;
+}
+
+.image-settings {
+  display: grid;
+  gap: 8px;
+}
+
+.image-settings .field label {
+  font-size: 12px;
+}
+
+.image-settings input[type="range"] {
+  width: 100%;
+}
+
+.image-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.image-result {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 8px;
+}
+
+.image-result img {
+  background: #f1f5f9;
+  border-radius: 6px;
+  height: 72px;
+  object-fit: contain;
+  width: 72px;
+}
+
+.image-result div {
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.image-result span {
+  color: var(--muted);
 }
 
 .upload-drop input[type="file"],

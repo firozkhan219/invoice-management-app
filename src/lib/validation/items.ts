@@ -26,6 +26,15 @@ export const taxRateSchema = z.object({
   isActive: z.coerce.boolean().default(true)
 });
 
+const optionalNumber = (max: number) =>
+  z.coerce.number().min(0).max(max).optional().or(z.literal("")).transform((value) => value === "" ? undefined : value);
+
+const optionalInt = (max: number) =>
+  z.coerce.number().int().min(0).max(max).optional().or(z.literal("")).transform((value) => value === "" ? undefined : value);
+
+/** HTML checkboxes are absent when unticked, so only "true"/"on" mean checked. */
+const checkbox = z.string().optional().transform((value) => value === "true" || value === "on");
+
 export const itemSchema = z.object({
   sku: optionalText(80),
   name: z.string().trim().min(1).max(180),
@@ -35,14 +44,21 @@ export const itemSchema = z.object({
   hsnSac: optionalText(20),
   manufacturer: optionalText(160),
   barcode: optionalText(120),
-  weightKg: z.coerce.number().min(0).max(99999999).optional().or(z.literal("")).transform((value) => value === "" ? undefined : value),
+  weightKg: optionalNumber(99999999),
+  grossWeightKg: optionalNumber(99999999),
+  lengthCm: optionalNumber(99999999),
+  widthCm: optionalNumber(99999999),
+  heightCm: optionalNumber(99999999),
+  material: optionalText(120),
+  finish: optionalText(120),
+  countryOfOrigin: optionalText(80),
+  unitsPerCarton: optionalInt(10000000),
+  moq: optionalInt(100000000),
   unitId: optionalUuid,
   taxRateId: optionalUuid,
   saleRate: z.coerce.number().min(0).max(999999999999).optional().or(z.literal("")).transform((value) => value === "" ? undefined : value),
   currency: z.string().trim().length(3).default("INR").transform((value) => value.toUpperCase()),
-  imageAssetId: optionalText(160),
-  imageStatus: optionalText(40),
-  isActive: z.coerce.boolean().default(true)
+  isActive: checkbox
 });
 
 export type UnitInput = z.infer<typeof unitSchema>;
@@ -56,6 +72,8 @@ export const itemUpdateSchema = itemSchema.extend({
 export const itemActionSchema = z.object({
   itemId: z.string().uuid()
 });
+
+export const itemImageFitSchema = z.enum(["contain", "cover", "original"]);
 
 export type ItemUpdateInput = z.infer<typeof itemUpdateSchema>;
 export type ItemActionInput = z.infer<typeof itemActionSchema>;
