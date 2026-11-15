@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { invoicePdfFilename, renderInvoicePdf, type InvoicePdfData } from "@/lib/invoices/invoice-pdf";
+import { amountInWords, invoicePdfFilename, renderInvoicePdf, type InvoicePdfData } from "@/lib/invoices/invoice-pdf";
 
 describe("invoice PDF rendering", () => {
   it("sanitizes invoice numbers for download filenames", () => {
@@ -15,6 +15,21 @@ describe("invoice PDF rendering", () => {
     expect(buffer.subarray(0, 4).toString()).toBe("%PDF");
     expect(buffer.byteLength).toBeGreaterThan(1000);
     expect(buffer.toString("latin1").match(/\/Type\s*\/Page\b/g)).toHaveLength(1);
+  });
+});
+
+describe("amount in words", () => {
+  it("spells INR with Indian numbering and paise", () => {
+    expect(amountInWords(3139, "INR")).toBe("Three Thousand One Hundred Thirty Nine Rupees Only");
+    expect(amountInWords(1480.9, "INR")).toBe("One Thousand Four Hundred Eighty Rupees and Ninety Paise Only");
+    expect(amountInWords(12345678, "INR")).toBe("One Crore Twenty Three Lakh Forty Five Thousand Six Hundred Seventy Eight Rupees Only");
+  });
+
+  it("spells foreign currencies in words with international numbering", () => {
+    expect(amountInWords(42560, "USD")).toBe("Forty Two Thousand Five Hundred Sixty US Dollars Only");
+    expect(amountInWords(1250000.05, "EUR")).toBe("One Million Two Hundred Fifty Thousand Euros and Five Cents Only");
+    expect(amountInWords(0, "GBP")).toBe("Zero Pounds Sterling Only");
+    expect(amountInWords(10, "XYZ")).toBe("Ten XYZ Only");
   });
 });
 
