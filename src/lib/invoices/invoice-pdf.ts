@@ -580,19 +580,53 @@ function formatQty(value: string | number): string {
   return Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 4 });
 }
 
-function amountInWords(value: number, currency: string): string {
-  if (currency !== "INR") return `${money(value)} ${currency} Only`;
-  const rupees = Math.floor(Math.abs(value));
-  if (rupees === 0) return "Zero Rupees Only";
-  return `${numberToIndianWords(rupees)} Rupees Only`;
+// Major / minor unit names used when spelling out the grand total.
+const currencyWords: Record<string, { major: string; minor: string }> = {
+  INR: { major: "Rupees", minor: "Paise" },
+  USD: { major: "US Dollars", minor: "Cents" },
+  EUR: { major: "Euros", minor: "Cents" },
+  GBP: { major: "Pounds Sterling", minor: "Pence" },
+  AUD: { major: "Australian Dollars", minor: "Cents" },
+  CAD: { major: "Canadian Dollars", minor: "Cents" },
+  SGD: { major: "Singapore Dollars", minor: "Cents" },
+  AED: { major: "UAE Dirhams", minor: "Fils" },
+  SAR: { major: "Saudi Riyals", minor: "Halalas" },
+  JPY: { major: "Japanese Yen", minor: "Sen" },
+  CNY: { major: "Chinese Yuan", minor: "Fen" },
+  CHF: { major: "Swiss Francs", minor: "Centimes" }
+};
+
+export function amountInWords(value: number, currency: string): string {
+  const code = (currency || "INR").toUpperCase();
+  const names = currencyWords[code] ?? { major: code, minor: "" };
+  const cents = Math.round(Math.abs(value) * 100);
+  const major = Math.floor(cents / 100);
+  const minor = cents % 100;
+  // Indian numbering (lakh / crore) for INR, international (million / billion) otherwise.
+  const toWords = code === "INR" ? numberToIndianWords : numberToInternationalWords;
+
+  const majorWords = `${major === 0 ? "Zero" : toWords(major)} ${names.major}`;
+  const minorWords = minor && names.minor ? ` and ${toWords(minor)} ${names.minor}` : "";
+  return `${majorWords}${minorWords} Only`;
+}
+
+const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+const belowHundred = (n: number) => n < 20 ? ones[n] : [tens[Math.floor(n / 10)], ones[n % 10]].filter(Boolean).join(" ");
+const belowThousand = (n: number) => [n >= 100 ? `${ones[Math.floor(n / 100)]} Hundred` : "", n % 100 ? belowHundred(n % 100) : ""].filter(Boolean).join(" ");
+
+function numberToInternationalWords(value: number): string {
+  const scales = ["", "Thousand", "Million", "Billion", "Trillion"];
+  const parts: string[] = [];
+  for (let i = 0; value > 0 && i < scales.length; i += 1) {
+    const chunk = value % 1000;
+    if (chunk) parts.unshift([belowThousand(chunk), scales[i]].filter(Boolean).join(" "));
+    value = Math.floor(value / 1000);
+  }
+  return parts.join(" ");
 }
 
 function numberToIndianWords(value: number): string {
-  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
-  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
-  const belowHundred = (n: number) => n < 20 ? ones[n] : [tens[Math.floor(n / 10)], ones[n % 10]].filter(Boolean).join(" ");
-  const belowThousand = (n: number) => [n >= 100 ? `${ones[Math.floor(n / 100)]} Hundred` : "", n % 100 ? belowHundred(n % 100) : ""].filter(Boolean).join(" ");
-
   const parts: string[] = [];
   const crore = Math.floor(value / 10000000);
   value %= 10000000;

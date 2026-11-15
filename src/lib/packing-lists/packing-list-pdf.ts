@@ -56,7 +56,8 @@ export type PackingListPdfData = {
 const page = { margin: 28, right: 567, bottom: 812 };
 const tableX = page.margin;
 const tableWidth = page.right - page.margin;
-const widths = { marks: 78, sku: 58, description: 170, quantity: 48, net: 52, gross: 52, dimensions: 64, cbm: 48 };
+// Must add up to tableWidth (539pt on A4 with 28pt margins) or the last column runs off the page.
+const widths = { marks: 70, sku: 62, description: 152, quantity: 48, net: 46, gross: 50, dimensions: 65, cbm: 46 };
 // Same calm palette as the invoice PDF so documents sent together look like one set.
 const colors = {
   ink: "#1f2a44",
@@ -165,7 +166,13 @@ function drawLinesTable(doc: PDFKit.PDFDocument, lines: PackingListPdfLine[], st
   y += 36;
 
   lines.forEach((line) => {
-    const rowHeight = Math.max(32, doc.heightOfString(line.description, { width: widths.description - 8 }) + 15);
+    const itemCell = [line.sku, line.hsnSac ? `HSN ${line.hsnSac}` : ""].filter(Boolean).join("\n") || "-";
+    doc.font("Helvetica").fontSize(7.3); // measure with the same font drawPlainCell uses
+    const rowHeight = Math.max(
+      32,
+      doc.heightOfString(line.description, { width: widths.description - 6 }) + 15,
+      doc.heightOfString(itemCell, { width: widths.sku - 6 }) + 15
+    );
     if (y + rowHeight + 112 > page.bottom) {
       doc.addPage();
       y = page.margin;
@@ -176,7 +183,7 @@ function drawLinesTable(doc: PDFKit.PDFDocument, lines: PackingListPdfLine[], st
     const dimensions = [line.lengthCm, line.widthCm, line.heightCm].filter(Boolean).join(" x ");
     const cells = [
       { value: [line.packageNo || `Line ${line.sortOrder}`, line.marksAndNumbers || ""].filter(Boolean).join("\n"), width: widths.marks, align: "left" as const },
-      { value: line.sku || line.hsnSac || "-", width: widths.sku, align: "left" as const },
+      { value: itemCell, width: widths.sku, align: "left" as const },
       { value: line.description, width: widths.description, align: "left" as const },
       { value: `${formatQty(line.quantity)} ${line.unitCode || ""}`.trim(), width: widths.quantity, align: "right" as const },
       { value: formatQty(line.netWeightKg), width: widths.net, align: "right" as const },
