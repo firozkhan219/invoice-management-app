@@ -57,8 +57,20 @@ export const packingListIssueSchema = z.object({
   expectedVersion: z.coerce.number().int().min(1)
 });
 
+export const packingListLineUpdateSchema = packingListLineSchema
+  .omit({ itemId: true, invoiceItemId: true })
+  .extend({ lineId: z.string().uuid() });
+
+export const packingListStatusSchema = z.object({
+  packingListId: z.string().uuid(),
+  expectedVersion: z.coerce.number().int().min(1),
+  reason: optionalText(500)
+});
+
 export type PackingListDraftInput = z.infer<typeof packingListDraftSchema>;
 export type PackingListLineInput = z.infer<typeof packingListLineSchema>;
 export type QuickPackingLineInput = z.infer<typeof quickPackingLineSchema>;
 export type PackingListLineDeleteInput = z.infer<typeof packingListLineDeleteSchema>;
 export type PackingListIssueInput = z.infer<typeof packingListIssueSchema>;
+export type PackingListLineUpdateInput = z.infer<typeof packingListLineUpdateSchema>;
+export type PackingListStatusInput = z.infer<typeof packingListStatusSchema>;

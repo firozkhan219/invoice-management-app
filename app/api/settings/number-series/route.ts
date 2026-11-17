@@ -1,17 +1,17 @@
-import { handleTenantForm, parseForm } from "@/lib/http/form";
+import { handleTenantForm, parseForm, withFlash } from "@/lib/http/form";
 import { createNumberSeries, updateNumberSeriesAction } from "@/lib/settings/settings-service";
 import { numberSeriesActionSchema, numberSeriesSchema } from "@/lib/validation/settings";
 
 export async function POST(request: Request) {
   return handleTenantForm(request, {
-    errorPath: "/settings",
+    errorPath: "/settings?tab=invoice-numbering",
     handler: async ({ context, fields }) => {
       if (typeof fields.action === "string" && fields.action) {
-        await updateNumberSeriesAction(context, parseForm(numberSeriesActionSchema, fields));
+        await updateNumberSeriesAction(context, parseForm(numberSeriesActionSchema, { ...fields, kind: "invoice" }));
       } else {
         await createNumberSeries(context, parseForm(numberSeriesSchema, fields));
       }
-      return "/settings";
+      return withFlash("/settings?tab=invoice-numbering", "notice", "Saved.");
     }
   });
 }

@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { AlertTriangle, ArrowLeft, CheckCircle2, Download, PackagePlus, Save, Send, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Ban, CheckCircle2, Download, Eye, PackagePlus, PencilLine, Save, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
+import { hasPermission } from "@/lib/permissions/roles";
 import { getPackingList, getPackingListWorkspace, packingListIssueRequirements, shipmentNeedsPorts } from "@/lib/packing-lists/packing-list-service";
 
 export default async function PackingListDetailPage({
@@ -26,6 +27,10 @@ export default async function PackingListDetailPage({
   if (!packingList) notFound();
 
   const canEdit = packingList.status === "draft";
+  const isIssued = packingList.status === "issued";
+  const isCancelled = packingList.status === "cancelled";
+  const mayIssue = hasPermission(context.role, "invoices:issue");
+  const mayCancel = hasPermission(context.role, "invoices:cancel");
   const issueRequirements = packingListIssueRequirements(packingList);
   const canIssue = canEdit && issueRequirements.length === 0;
   const readiness = packingListReadiness({
@@ -58,12 +63,27 @@ export default async function PackingListDetailPage({
                   Save changes
                 </button>
               ) : null}
-              {packingList.status === "issued" ? (
+              {isIssued && mayIssue ? (
+                <form action="/api/packing-lists/reopen" method="post">
+                  <input type="hidden" name="packingListId" value={packingList.id} />
+                  <input type="hidden" name="expectedVersion" value={packingList.version} />
+                  <button className="button subtle tiny" type="submit">
+                    <PencilLine size={16} />
+                    Edit
+                  </button>
+                </form>
+              ) : null}
+              {canEdit ? (
+                <a className="button subtle tiny" href={`/api/packing-lists/${packingList.id}/pdf`} target="_blank" rel="noreferrer">
+                  <Eye size={16} />
+                  Preview PDF
+                </a>
+              ) : (
                 <a className="button tiny" href={`/api/packing-lists/${packingList.id}/pdf`} target="_blank" rel="noreferrer">
                   <Download size={16} />
                   Download PDF
                 </a>
-              ) : null}
+              )}
             </div>
           </div>
 
@@ -73,9 +93,16 @@ export default async function PackingListDetailPage({
               <span>Page 1 of 1</span>
             </div>
 
+            {isCancelled ? (
+              <p className="notice error">This packing list is cancelled. Its number {packingList.packingListNumber} stays used and will not be issued again.</p>
+            ) : null}
+            {canEdit && packingList.packingListNumber ? (
+              <p className="notice">Open for editing. It keeps number {packingList.packingListNumber}; finalise it again to update the PDF.</p>
+            ) : null}
+
             <div className="document-command-panel compact">
               <div>
-                <p className="muted">{packingList.status === "issued" ? "Finalised" : "Before you finalise"}</p>
+                <p className="muted">{canEdit ? "Before you finalise" : isCancelled ? "Cancelled" : "Finalised"}</p>
                 <h2>{readiness.ready === readiness.total ? "All details complete" : `${readiness.ready} of ${readiness.total} details complete`}</h2>
               </div>
               <div className="readiness-list">
@@ -123,7 +150,33 @@ export default async function PackingListDetailPage({
                   Finalise &amp; make PDF
                 </button>
               </form>
+              {!packingList.packingListNumber ? (
+                <details className="details compact">
+                  <summary><Trash2 size={15} /> Delete draft</summary>
+                  <form className="form compact-form" action="/api/packing-lists/delete" method="post">
+                    <input type="hidden" name="packingListId" value={packingList.id} />
+                    <input type="hidden" name="expectedVersion" value={packingList.version} />
+                    <p className="muted">This removes the draft and all its package lines. It cannot be undone.</p>
+                    <button className="button danger" type="submit">Delete permanently</button>
+                  </form>
+                </details>
+              ) : null}
             </div>
+            ) : null}
+
+            {isIssued && mayCancel ? (
+              <details className="details top-space">
+                <summary><Ban size={16} /> Cancel packing list</summary>
+                <form className="form top-space" action="/api/packing-lists/cancel" method="post">
+                  <input type="hidden" name="packingListId" value={packingList.id} />
+                  <input type="hidden" name="expectedVersion" value={packingList.version} />
+                  <div className="field">
+                    <label htmlFor="cancelReason">Reason</label>
+                    <textarea id="cancelReason" name="reason" required maxLength={500} />
+                  </div>
+                  <button className="button danger" type="submit">Cancel packing list</button>
+                </form>
+              </details>
             ) : null}
 
             <section className="document-lines">
@@ -171,12 +224,18 @@ export default async function PackingListDetailPage({
                           <td>{line.volumeCbm.toString()}</td>
                           {canEdit ? (
                             <td>
-                              <form action="/api/packing-lists/lines/delete" method="post">
-                                <input type="hidden" name="packingListId" value={packingList.id} />
-                                <input type="hidden" name="lineId" value={line.id} />
-                                <input type="hidden" name="expectedVersion" value={packingList.version} />
-                                <button className="icon-button danger" title="Delete packing line" type="submit"><Trash2 size={16} /></button>
-                              </form>
+                              <div className="line-actions">
+                                <details className="details compact">
+                                  <summary>Edit</summary>
+                                  <PackingLineEditForm line={line} packingListId={packingList.id} version={packingList.version} />
+                                </details>
+                                <form action="/api/packing-lists/lines/delete" method="post">
+                                  <input type="hidden" name="packingListId" value={packingList.id} />
+                                  <input type="hidden" name="lineId" value={line.id} />
+                                  <input type="hidden" name="expectedVersion" value={packingList.version} />
+                                  <button className="icon-button danger" title="Delete packing line" type="submit"><Trash2 size={16} /></button>
+                                </form>
+                              </div>
                             </td>
                           ) : null}
                         </tr>
@@ -186,6 +245,16 @@ export default async function PackingListDetailPage({
                 </div>
               )}
             </section>
+
+            <details className="details top-space document-preview" open={!canEdit}>
+              <summary><Eye size={16} /> {canEdit ? "Draft preview (save changes first to see them here)" : "PDF preview"}</summary>
+              <iframe
+                className="pdf-preview-frame"
+                src={`/api/packing-lists/${packingList.id}/pdf?v=${packingList.version}#view=FitH`}
+                title="Packing list PDF preview"
+                loading="lazy"
+              />
+            </details>
 
             {canEdit ? (
               <details className="details top-space">
@@ -240,6 +309,49 @@ export default async function PackingListDetailPage({
         </main>
       </div>
     </AppShell>
+  );
+}
+
+function PackingLineEditForm({
+  line,
+  packingListId,
+  version
+}: {
+  line: NonNullable<Awaited<ReturnType<typeof getPackingList>>>["lines"][number];
+  packingListId: string;
+  version: number;
+}) {
+  const id = (name: string) => `${name}-${line.id}`;
+  return (
+    <form className="form compact-form" action="/api/packing-lists/lines/update" method="post">
+      <input type="hidden" name="packingListId" value={packingListId} />
+      <input type="hidden" name="lineId" value={line.id} />
+      <input type="hidden" name="expectedVersion" value={version} />
+      <div className="form-grid">
+        <div className="field"><label htmlFor={id("sortOrder")}>Row #</label><input id={id("sortOrder")} name="sortOrder" type="number" min="1" defaultValue={line.sortOrder} /></div>
+        <div className="field"><label htmlFor={id("packageNo")}>Package no</label><input id={id("packageNo")} name="packageNo" defaultValue={line.packageNo || ""} /></div>
+      </div>
+      <div className="field"><label htmlFor={id("marks")}>Marks</label><input id={id("marks")} name="marksAndNumbers" defaultValue={line.marksAndNumbers || ""} /></div>
+      <div className="form-grid">
+        <div className="field"><label htmlFor={id("sku")}>SKU</label><input id={id("sku")} name="sku" defaultValue={line.sku || ""} /></div>
+        <div className="field"><label htmlFor={id("hsn")}>HSN/SAC</label><input id={id("hsn")} name="hsnSac" defaultValue={line.hsnSac || ""} /></div>
+      </div>
+      <div className="field"><label htmlFor={id("description")}>Description</label><textarea id={id("description")} name="description" required defaultValue={line.description} /></div>
+      <div className="form-grid">
+        <div className="field"><label htmlFor={id("quantity")}>Quantity</label><input id={id("quantity")} name="quantity" type="number" step="0.0001" min="0" required defaultValue={line.quantity.toString()} /></div>
+        <div className="field"><label htmlFor={id("unit")}>Unit</label><input id={id("unit")} name="unitCode" defaultValue={line.unitCode || ""} /></div>
+      </div>
+      <div className="form-grid">
+        <div className="field"><label htmlFor={id("net")}>Net KG</label><input id={id("net")} name="netWeightKg" type="number" step="0.0001" min="0" defaultValue={line.netWeightKg.toString()} /></div>
+        <div className="field"><label htmlFor={id("gross")}>Gross KG</label><input id={id("gross")} name="grossWeightKg" type="number" step="0.0001" min="0" defaultValue={line.grossWeightKg.toString()} /></div>
+      </div>
+      <div className="form-grid three">
+        <div className="field"><label htmlFor={id("l")}>L cm</label><input id={id("l")} name="lengthCm" type="number" step="0.0001" min="0" defaultValue={line.lengthCm?.toString() || ""} /></div>
+        <div className="field"><label htmlFor={id("w")}>W cm</label><input id={id("w")} name="widthCm" type="number" step="0.0001" min="0" defaultValue={line.widthCm?.toString() || ""} /></div>
+        <div className="field"><label htmlFor={id("h")}>H cm</label><input id={id("h")} name="heightCm" type="number" step="0.0001" min="0" defaultValue={line.heightCm?.toString() || ""} /></div>
+      </div>
+      <button className="button" type="submit">Save line</button>
+    </form>
   );
 }
 

@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AlertTriangle, ArrowLeft, Ban, CheckCircle2, CreditCard, FileClock, FileText, PackageCheck, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Ban, CheckCircle2, Copy, CreditCard, Eye, FileClock, FileText, PackageCheck, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
+import { daysOverdue, getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
 import { draftIssueRequirements } from "@/lib/invoices/lifecycle";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
@@ -77,6 +77,7 @@ export default async function InvoiceEditorPage({
           <h1>
             {invoice.invoiceNumber || "Draft invoice"}
             <span className={`status-badge ${invoice.status}`}>{statusLabel}</span>
+            {daysOverdue(invoice) > 0 ? <span className="status-badge overdue">{daysOverdue(invoice)} days overdue</span> : null}
           </h1>
           <p className="muted">
             {invoice.buyer?.displayName || "No buyer yet"} · {formatDate(invoice.invoiceDate)} · {formatMoney(invoice.currency, invoice.grandTotal)}
@@ -94,6 +95,15 @@ export default async function InvoiceEditorPage({
           ) : null}
           {canOpenPdf ? (
             <a className="button subtle" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer"><FileText size={16} /> PDF</a>
+          ) : null}
+          {isDraft ? (
+            <a className="button subtle" href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer"><Eye size={16} /> Preview PDF</a>
+          ) : null}
+          {mayCreate ? (
+            <form action="/api/invoices/duplicate" method="post">
+              <input type="hidden" name="invoiceId" value={invoice.id} />
+              <button className="button subtle" type="submit" title="Copy this invoice into a new draft"><Copy size={16} /> Duplicate</button>
+            </form>
           ) : null}
           {canRecordPayment ? (
             <Link className="button subtle" href={paymentHref}><CreditCard size={16} /> Record payment</Link>
@@ -117,6 +127,17 @@ export default async function InvoiceEditorPage({
       ) : null}
       {isDraft && invoice.invoiceNumber ? (
         <p className="notice">This invoice is open for editing. It keeps number {invoice.invoiceNumber}; issue it again to update the PDF.</p>
+      ) : null}
+      {isDraft && invoice.items.length > 0 ? (
+        <details className="details document-preview">
+          <summary><Eye size={16} /> Draft preview (save changes first to see them here)</summary>
+          <iframe
+            className="pdf-preview-frame"
+            src={`/api/invoices/${invoice.id}/pdf?v=${invoice.version}#view=FitH`}
+            title="Invoice PDF preview"
+            loading="lazy"
+          />
+        </details>
       ) : null}
 
       <div className="grid two-column document-layout">

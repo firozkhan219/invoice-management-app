@@ -4,8 +4,10 @@ import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
 import type {
+  LockedPeriodActionInput,
   LockedPeriodInput,
   NumberSeriesActionInput,
+  OrganisationProfileInput,
   NumberSeriesInput,
   OrganisationSettingsInput
 } from "@/lib/validation/settings";
@@ -44,7 +46,8 @@ export async function getSettingsWorkspace(context: TenantContext) {
 
 export async function upsertOrganisationSettings(
   context: TenantContext,
-  input: OrganisationSettingsInput
+  input: OrganisationSettingsInput,
+  clearedKeys: readonly string[] = []
 ) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "organisation:update");
@@ -64,10 +67,11 @@ export async function upsertOrganisationSettings(
       if (!bankAccount) throw new Error("Default bank account not found.");
     }
 
+    const cleared = Object.fromEntries(clearedKeys.map((key) => [key, null]));
     const settings = await tx.organisationSettings.upsert({
       where: { organisationId: tenant.organisationId },
       create: { ...input, organisationId: tenant.organisationId },
-      update: input
+      update: { ...input, ...cleared }
     });
 
     await tx.auditLog.create({
@@ -178,56 +182,138 @@ export async function updateNumberSeriesAction(
   assertPermission(tenant.role, "organisation:update");
 
   return prisma.$transaction(async (tx) => {
-    const series = await tx.invoiceNumberSeries.findFirst({
+    // Invoice and credit note series share the same shape, so one code path handles both.
+    const model = (input.kind === "credit_note" ? tx.creditNoteNumberSeries : tx.invoiceNumberSeries) as unknown as typeof tx.invoiceNumberSeries;
+    const entityType = input.kind === "credit_note" ? "credit_note_number_series" : "invoice_number_series";
+    const label = input.kind === "credit_note" ? "Credit note number series" : "Invoice number series";
+
+    const series = await model.findFirst({
       where: { id: input.seriesId, organisationId: tenant.organisationId }
     });
-    if (!series) throw new Error("Invoice number series not found.");
+    if (!series) throw new Error(`${label} not found.`);
 
+    let updated;
     if (input.action === "make_default") {
       if (!series.isActive) throw new Error("Inactive series cannot be made default.");
-      await tx.invoiceNumberSeries.updateMany({
+      await model.updateMany({
         where: { organisationId: tenant.organisationId, companyId: series.companyId },
         data: { isDefault: false }
       });
-      const updated = await tx.invoiceNumberSeries.update({
-        where: { id: series.id },
-        data: { isDefault: true }
-      });
-      await tx.auditLog.create({
-        data: {
+      updated = await model.update({ where: { id: series.id }, data: { isDefault: true } });
+    } else if (input.action === "reactivate") {
+      if (series.isActive) return series;
+      const clash = await model.count({
+        where: {
           organisationId: tenant.organisationId,
-          actorUserId: tenant.userId,
-          action: "invoice_number_series.default",
-          entityType: "invoice_number_series",
-          entityId: updated.id
+          companyId: series.companyId,
+          pattern: series.pattern,
+          isActive: true,
+          NOT: { id: series.id }
         }
       });
-      return updated;
-    }
-
-    const activeSeriesInScope = await tx.invoiceNumberSeries.count({
-      where: {
-        organisationId: tenant.organisationId,
-        companyId: series.companyId,
-        isActive: true,
-        NOT: { id: series.id }
+      if (clash > 0) throw new Error("Another active series in this scope already uses this pattern.");
+      updated = await model.update({ where: { id: series.id }, data: { isActive: true } });
+    } else {
+      const activeSeriesInScope = await model.count({
+        where: {
+          organisationId: tenant.organisationId,
+          companyId: series.companyId,
+          isActive: true,
+          NOT: { id: series.id }
+        }
+      });
+      if (series.isDefault && activeSeriesInScope === 0) {
+        throw new Error("Create or select another active default series before deactivating this one.");
       }
-    });
-    if (series.isDefault && activeSeriesInScope === 0) {
-      throw new Error("Create or select another active default series before deactivating this one.");
+      updated = await model.update({ where: { id: series.id }, data: { isActive: false, isDefault: false } });
     }
 
-    const updated = await tx.invoiceNumberSeries.update({
-      where: { id: series.id },
-      data: { isActive: false, isDefault: false }
-    });
     await tx.auditLog.create({
       data: {
         organisationId: tenant.organisationId,
         actorUserId: tenant.userId,
-        action: "invoice_number_series.deactivate",
-        entityType: "invoice_number_series",
+        action: `${entityType}.${input.action === "make_default" ? "default" : input.action}`,
+        entityType,
         entityId: updated.id
+      }
+    });
+
+    return updated;
+  });
+}
+
+export async function updateOrganisationProfile(context: TenantContext, input: OrganisationProfileInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "organisation:update");
+
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.organisation.findUniqueOrThrow({ where: { id: tenant.organisationId } });
+
+    // Changing the financial year start would renumber {FY} series mid-stream; refuse once numbers are out.
+    if (current.financialYearStart !== input.financialYearStart) {
+      const [numberedInvoices, numberedCreditNotes] = await Promise.all([
+        tx.invoice.count({ where: { organisationId: tenant.organisationId, invoiceNumber: { not: null } } }),
+        tx.creditNote.count({ where: { organisationId: tenant.organisationId, creditNoteNumber: { not: null } } })
+      ]);
+      if (numberedInvoices + numberedCreditNotes > 0) {
+        throw new Error("The financial year start cannot change after invoices or credit notes have been numbered.");
+      }
+    }
+
+    const updated = await tx.organisation.update({
+      where: { id: tenant.organisationId },
+      data: input
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "organisation.update",
+        entityType: "organisation",
+        entityId: updated.id,
+        metadata: {
+          before: {
+            name: current.name,
+            locale: current.locale,
+            timeZone: current.timeZone,
+            defaultCurrency: current.defaultCurrency,
+            financialYearStart: current.financialYearStart
+          }
+        }
+      }
+    });
+
+    return updated;
+  });
+}
+
+export async function updateLockedPeriodAction(context: TenantContext, input: LockedPeriodActionInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "organisation:update");
+  // Unlocking a closed period reopens it for edits, so only the owner may do it.
+  if (input.action === "deactivate" && tenant.role !== "owner") {
+    throw new Error("Only the organisation owner can unlock a period.");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const period = await tx.lockedPeriod.findFirst({
+      where: { id: input.lockedPeriodId, organisationId: tenant.organisationId }
+    });
+    if (!period) throw new Error("Locked period not found.");
+
+    const updated = await tx.lockedPeriod.update({
+      where: { id: period.id },
+      data: { isActive: input.action === "reactivate" }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: `locked_period.${input.action}`,
+        entityType: "locked_period",
+        entityId: period.id
       }
     });
 

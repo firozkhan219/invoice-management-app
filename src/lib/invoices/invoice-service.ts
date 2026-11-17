@@ -1,5 +1,5 @@
 import { Prisma, type InvoiceStatus } from "@prisma/client";
-import { prisma } from "@/lib/db/prisma";
+import { lockInvoiceRow, prisma } from "@/lib/db/prisma";
 import { calculateInvoiceTotals, resolveTaxMode } from "@/lib/invoices/calculation";
 import { canDeleteDraftInvoiceStatus, draftIssueRequirements } from "@/lib/invoices/lifecycle";
 import type { InvoicePdfData, InvoicePdfLine } from "@/lib/invoices/invoice-pdf";
@@ -79,12 +79,37 @@ function validDate(value?: string): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+/** Start of today in UTC, matching how @db.Date due dates are stored. */
+function startOfTodayUtc(now = new Date()) {
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+/** Unpaid issued invoices whose due date has passed. Shared by the list filter and the dashboard. */
+export function overdueInvoiceWhere(now = new Date()): Prisma.InvoiceWhereInput {
+  return {
+    status: { in: ["issued", "partially_paid"] },
+    dueDate: { lt: startOfTodayUtc(now) },
+    balanceDue: { gt: new Prisma.Decimal(0) }
+  };
+}
+
+/** Whole days past the due date, or 0 when the invoice is not overdue. */
+export function daysOverdue(
+  invoice: { status: string; dueDate: Date | null; balanceDue: Prisma.Decimal },
+  now = new Date()
+): number {
+  if (!invoice.dueDate || !["issued", "partially_paid"].includes(invoice.status) || invoice.balanceDue.lte(0)) return 0;
+  const days = Math.floor((startOfTodayUtc(now).getTime() - invoice.dueDate.getTime()) / 86_400_000);
+  return days > 0 ? days : 0;
+}
+
 export async function listInvoices(context: TenantContext, filters: InvoiceListFilters = {}) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:read");
   const where: Prisma.InvoiceWhereInput = {
     organisationId: tenant.organisationId,
     ...(filters.status && INVOICE_STATUSES.includes(filters.status as InvoiceStatus) ? { status: filters.status as InvoiceStatus } : {}),
+    ...(filters.status === "overdue" ? overdueInvoiceWhere() : {}),
     ...(filters.currency ? { currency: filters.currency.toUpperCase() } : {}),
     ...(validDate(filters.dateFrom) || validDate(filters.dateTo) ? {
       invoiceDate: {
@@ -250,6 +275,96 @@ export async function createInvoiceDraft(context: TenantContext, input: InvoiceD
         action: "invoice_draft.create",
         entityType: "invoice",
         entityId: invoice.id
+      }
+    });
+
+    return invoice;
+  });
+}
+
+/**
+ * Copies an invoice (any status) into a new draft dated today. Parties, shipping details, notes and
+ * lines are copied; number, payments, credits and issue snapshots are not. The due date keeps the
+ * same payment term length.
+ */
+export async function duplicateInvoice(context: TenantContext, invoiceId: string) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+
+  return prisma.$transaction(async (tx) => {
+    const source = await tx.invoice.findFirst({
+      where: { id: invoiceId, organisationId: tenant.organisationId },
+      include: { items: { orderBy: { sortOrder: "asc" } } }
+    });
+    if (!source) throw new Error("Invoice not found.");
+
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const termDays = source.dueDate
+      ? Math.max(0, Math.round((source.dueDate.getTime() - source.invoiceDate.getTime()) / 86_400_000))
+      : null;
+
+    const created = await tx.invoice.create({
+      data: {
+        organisationId: tenant.organisationId,
+        companyId: source.companyId,
+        buyerId: source.buyerId,
+        consigneeBuyerId: source.consigneeBuyerId,
+        billingAddressId: source.billingAddressId,
+        shippingAddressId: source.shippingAddressId,
+        bankAccountId: source.bankAccountId,
+        invoiceDate: today,
+        dueDate: termDays === null ? null : new Date(today.getTime() + termDays * 86_400_000),
+        currency: source.currency,
+        placeOfSupplyStateCode: source.placeOfSupplyStateCode,
+        taxMode: source.taxMode,
+        exporterReference: source.exporterReference,
+        preCarriageBy: source.preCarriageBy,
+        placeOfReceipt: source.placeOfReceipt,
+        vesselFlightNo: source.vesselFlightNo,
+        portOfLoading: source.portOfLoading,
+        portOfDischarge: source.portOfDischarge,
+        finalDestination: source.finalDestination,
+        termsOfDelivery: source.termsOfDelivery,
+        notes: source.notes,
+        declaration: source.declaration,
+        invoiceDiscount: source.invoiceDiscount,
+        otherCharges: source.otherCharges,
+        createdById: tenant.userId,
+        paidTotal: new Prisma.Decimal(0),
+        balanceDue: new Prisma.Decimal(0)
+      }
+    });
+
+    if (source.items.length > 0) {
+      await tx.invoiceItem.createMany({
+        data: source.items.map((item) => ({
+          organisationId: tenant.organisationId,
+          invoiceId: created.id,
+          itemId: item.itemId,
+          sortOrder: item.sortOrder,
+          sku: item.sku,
+          description: item.description,
+          hsnSac: item.hsnSac,
+          quantity: item.quantity,
+          unitCode: item.unitCode,
+          rate: item.rate,
+          discountAmount: item.discountAmount,
+          gstRate: item.gstRate
+        }))
+      });
+    }
+
+    const invoice = await recalculateDraft(tx, created.id, tenant.userId, { bumpVersion: false });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "invoice_draft.duplicate",
+        entityType: "invoice",
+        entityId: invoice.id,
+        metadata: { sourceInvoiceId: source.id, sourceInvoiceNumber: source.invoiceNumber }
       }
     });
 
@@ -882,7 +997,7 @@ export async function cancelInvoice(context: TenantContext, input: CancelInvoice
   assertPermission(tenant.role, "invoices:cancel");
 
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
+    await lockInvoiceRow(tx, input.invoiceId);
     const invoice = await tx.invoice.findFirst({
       where: { id: input.invoiceId, organisationId: tenant.organisationId },
       include: { items: true }
@@ -896,6 +1011,12 @@ export async function cancelInvoice(context: TenantContext, input: CancelInvoice
     });
     if (issuedCreditNotes > 0 || invoice.creditedTotal.gt(0)) {
       throw new Error("This invoice has issued credit notes, so it cannot be cancelled.");
+    }
+    const issuedPackingLists = await tx.packingList.count({
+      where: { organisationId: tenant.organisationId, invoiceId: invoice.id, status: "issued" }
+    });
+    if (issuedPackingLists > 0) {
+      throw new Error("Cancel the issued packing lists for this invoice first.");
     }
     await assertDateNotLocked(tx, tenant.organisationId, invoice.invoiceDate, "cancel this invoice");
 
@@ -961,10 +1082,12 @@ export async function generateInvoicePdf(context: TenantContext, invoiceId: stri
   });
 
   if (!invoice) throw new Error("Invoice not found.");
-  if (!["issued", "partially_paid", "paid"].includes(invoice.status)) {
+  // Drafts (including reopened invoices) render from live data as a watermarked preview and are never stored.
+  const isDraft = invoice.status === "draft";
+  if (!isDraft && !["issued", "partially_paid", "paid"].includes(invoice.status)) {
     throw new Error("Only issued invoices can be generated as PDF.");
   }
-  if (!invoice.invoiceNumber) throw new Error("Issued invoice is missing its invoice number.");
+  if (!isDraft && !invoice.invoiceNumber) throw new Error("Issued invoice is missing its invoice number.");
 
   const [{ invoicePdfFilename, renderInvoicePdf }, { invoicePdfStorageKey, readPrivateDocument, writePrivateDocument }] = await Promise.all([
     import("@/lib/invoices/invoice-pdf"),
@@ -979,11 +1102,15 @@ export async function generateInvoicePdf(context: TenantContext, invoiceId: stri
     companyAssets?.signatureAsset ? readAssetForPdf(readPrivateDocument, companyAssets.signatureAsset) : Promise.resolve(null)
   ]);
   const pdfData = {
-    ...buildInvoicePdfData(invoice),
+    ...buildInvoicePdfData(invoice, { live: isDraft }),
+    ...(isDraft ? { invoiceNumber: invoice.invoiceNumber ? `${invoice.invoiceNumber} (draft)` : "DRAFT", draft: true } : {}),
     logo,
     signature
   };
   const buffer = await renderInvoicePdf(pdfData);
+  if (isDraft) {
+    return { buffer, filename: "invoice-draft-preview.pdf", document: null };
+  }
   const stored = await writePrivateDocument(
     invoicePdfStorageKey(tenant.organisationId, invoice.id),
     buffer
@@ -1018,7 +1145,7 @@ export async function generateInvoicePdf(context: TenantContext, invoiceId: stri
 
   return {
     buffer,
-    filename: invoicePdfFilename(invoice.invoiceNumber),
+    filename: invoicePdfFilename(invoice.invoiceNumber!),
     document
   };
 }
@@ -1053,12 +1180,14 @@ function buildInvoiceSnapshot(invoice: InvoiceSnapshotSource, effectiveTaxMode: 
   };
 }
 
-function buildInvoicePdfData(invoice: InvoicePdfSource): InvoicePdfData {
-  const company = asRecord(invoice.companySnapshot) ?? asRecord(invoice.company);
-  const buyer = asRecord(invoice.buyerSnapshot) ?? asRecord(invoice.buyer);
-  const consigneeSnapshot = asRecord(invoice.consigneeSnapshot);
-  const bank = bankRecordForDocument(asRecord(invoice.bankSnapshot) ?? asRecord(invoice.bankAccount));
-  const calculation = asRecord(invoice.calculationSnapshot);
+function buildInvoicePdfData(invoice: InvoicePdfSource, options: { live?: boolean } = {}): InvoicePdfData {
+  // A reopened draft still carries the snapshots from its last issue; a live preview must ignore them.
+  const snapshot = (value: unknown) => (options.live ? null : asRecord(value));
+  const company = snapshot(invoice.companySnapshot) ?? asRecord(invoice.company);
+  const buyer = snapshot(invoice.buyerSnapshot) ?? asRecord(invoice.buyer);
+  const consigneeSnapshot = snapshot(invoice.consigneeSnapshot);
+  const bank = bankRecordForDocument(snapshot(invoice.bankSnapshot) ?? asRecord(invoice.bankAccount));
+  const calculation = snapshot(invoice.calculationSnapshot);
 
   return {
     invoiceNumber: invoice.invoiceNumber || "invoice",

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { FileText, Save, Send, Trash2 } from "lucide-react";
+import { Ban, FileText, Save, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getCreditNote, getCreditNoteWorkspace } from "@/lib/credit-notes/credit-note-service";
@@ -26,6 +26,7 @@ export default async function CreditNoteDetailPage({
   await searchParams;
   // Viewers can open credit notes; only roles that can create see the draft editing forms.
   const isDraft = creditNote.status === "draft" && hasPermission(context.role, "invoices:create");
+  const mayCancel = hasPermission(context.role, "invoices:cancel");
   const workspace = isDraft ? await getCreditNoteWorkspace(context) : { series: [], organisation: { financialYearStart: 4 } };
   const canIssue = isDraft && creditNote.lines.length > 0 && creditNote.grandTotal.gt(0) && workspace.series.length > 0;
   const original = creditNote.originalInvoice;
@@ -45,6 +46,12 @@ export default async function CreditNoteDetailPage({
         <div className="toolbar">
           <Link className="button subtle" href="/credit-notes">Credit Notes</Link>
           <Link className="button subtle" href={`/invoices/${original.id}`}>Original invoice</Link>
+          {isDraft ? (
+            <form action="/api/credit-notes/delete" method="post">
+              <input type="hidden" name="creditNoteId" value={creditNote.id} />
+              <button className="button subtle danger-text" type="submit" title="Delete this draft and its lines"><Trash2 size={16} /> Delete draft</button>
+            </form>
+          ) : null}
           {creditNote.status === "issued" ? (
             <a className="button" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer">
               <FileText size={18} />
@@ -222,21 +229,41 @@ export default async function CreditNoteDetailPage({
                 ) : null}
               </section>
             </>
-          ) : (
-            <section className="panel">
-              <div className="section-title">
-                <div>
-                  <p className="muted">Output</p>
-                  <h2>Documents</h2>
+          ) : creditNote.status === "issued" ? (
+            <>
+              <section className="panel">
+                <div className="section-title">
+                  <div>
+                    <p className="muted">Output</p>
+                    <h2>Documents</h2>
+                  </div>
+                  <FileText size={20} />
                 </div>
-                <FileText size={20} />
-              </div>
-              <a className="button" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer">
-                <FileText size={18} />
-                Open PDF
-              </a>
-            </section>
-          )}
+                <a className="button" href={`/api/credit-notes/${creditNote.id}/pdf`} target="_blank" rel="noreferrer">
+                  <FileText size={18} />
+                  Open PDF
+                </a>
+              </section>
+              {mayCancel ? (
+                <section className="panel">
+                  <details className="details">
+                    <summary><Ban size={16} /> Cancel credit note</summary>
+                    <form className="form top-space" action="/api/credit-notes/cancel" method="post">
+                      <input type="hidden" name="creditNoteId" value={creditNote.id} />
+                      <p className="muted">The credited amount goes back onto the invoice balance. The number {creditNote.creditNoteNumber} stays used.</p>
+                      <div className="field">
+                        <label htmlFor="cancelReason">Reason</label>
+                        <textarea id="cancelReason" name="reason" required minLength={3} maxLength={500} />
+                      </div>
+                      <button className="button danger" type="submit">Cancel credit note</button>
+                    </form>
+                  </details>
+                </section>
+              ) : null}
+            </>
+          ) : creditNote.status === "cancelled" ? (
+            <p className="notice error">This credit note is cancelled. Its amount no longer reduces the invoice balance.</p>
+          ) : null}
         </aside>
       </div>
     </AppShell>

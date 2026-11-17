@@ -4,7 +4,7 @@ import { Download, FilePlus2, Search, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { draftIssueRequirements, draftLifecycleLabel } from "@/lib/invoices/lifecycle";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getInvoiceIssueOptions, listInvoices } from "@/lib/invoices/invoice-service";
+import { daysOverdue, getInvoiceIssueOptions, listInvoices } from "@/lib/invoices/invoice-service";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
@@ -62,6 +62,7 @@ export default async function InvoicesPage({
                 <option value="draft">Draft</option>
                 <option value="issued">Issued</option>
                 <option value="partially_paid">Partially paid</option>
+                <option value="overdue">Overdue</option>
                 <option value="paid">Paid</option>
                 <option value="cancelled">Cancelled</option>
               </select>
@@ -118,7 +119,10 @@ export default async function InvoicesPage({
                       <td><Link href={`/invoices/${invoice.id}`}>{invoice.invoiceDate.toISOString().slice(0, 10)}</Link></td>
                       <td>{invoice.invoiceNumber || "-"}</td>
                       <td>{invoice.buyer?.displayName || "-"}</td>
-                      <td><span className={`status-badge ${invoice.status}`}>{invoice.status.replace("_", " ")}</span></td>
+                      <td>
+                        <span className={`status-badge ${invoice.status}`}>{invoice.status.replace("_", " ")}</span>
+                        {daysOverdue(invoice) > 0 ? <span className="status-badge overdue">{daysOverdue(invoice)}d overdue</span> : null}
+                      </td>
                       <td><span className={lifecycleLabel === "Ready to issue" ? "badge" : "badge neutral"}>{lifecycleLabel}</span></td>
                       <td className="num strong">{formatMoney(invoice.currency, invoice.grandTotal)}</td>
                       <td className="num">{formatMoney(invoice.currency, invoice.paidTotal)}</td>

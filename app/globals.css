@@ -2671,3 +2671,17 @@ aside .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     justify-content: flex-start;
   }
 }
+
+/* ---------- Document PDF preview ---------- */
+.pdf-preview-frame { display: block; width: 100%; height: min(80vh, 1100px); margin-top: 12px; border: 1px solid var(--border, #e2e8f0); border-radius: 8px; background: #f3f6fb; }
+
+/* ---------- Tabs ---------- */
+.tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border, #e2e8f0); overflow-x: auto; scrollbar-width: thin; }
+.tabs a { padding: 10px 14px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--text-soft, #66758c); font-size: 14px; font-weight: 500; white-space: nowrap; text-decoration: none; }
+.tabs a:hover { color: var(--foreground); }
+.tabs a[aria-current="page"] { color: var(--primary, #2855c5); border-bottom-color: var(--primary, #2855c5); font-weight: 600; }
+
+/* ---------- Overdue ---------- */
+.status-badge.overdue { background: #fef3f2; color: var(--danger); margin-left: 6px; }
+.stat-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--danger); text-underline-offset: 3px; }
+.button.danger-text { color: var(--danger); }

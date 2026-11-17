@@ -8,6 +8,8 @@ import type {
   PackingListIssueInput,
   PackingListLineDeleteInput,
   PackingListLineInput,
+  PackingListLineUpdateInput,
+  PackingListStatusInput,
   QuickPackingLineInput
 } from "@/lib/validation/packing-lists";
 
@@ -21,13 +23,17 @@ export type PackingListFilters = {
   source?: string;
 };
 
+const PACKING_STATUSES: readonly PackingListStatus[] = ["draft", "issued", "cancelled"];
+
 export async function listPackingLists(context: TenantContext, filters: PackingListFilters = {}) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "documents:download");
 
   const where: Prisma.PackingListWhereInput = {
     organisationId: tenant.organisationId,
-    ...(filters.status ? { status: filters.status as PackingListStatus } : {}),
+    ...(filters.status && PACKING_STATUSES.includes(filters.status as PackingListStatus)
+      ? { status: filters.status as PackingListStatus }
+      : {}),
     ...(filters.source === "invoice" ? { invoiceId: { not: null } } : {}),
     ...(filters.source === "manual" ? { invoiceId: null } : {}),
     ...(filters.q
@@ -301,7 +307,27 @@ export async function createQuickPackingList(
   });
 }
 
-export async function updatePackingListDraft(context: TenantContext, packingListId: string, input: PackingListDraftInput) {
+/** Draft fields a user may blank out; an empty submitted value for these is saved as null. */
+export const CLEARABLE_PACKING_FIELDS = [
+  "companyId",
+  "buyerId",
+  "consigneeBuyerId",
+  "exportReference",
+  "containerNumber",
+  "sealNumber",
+  "shipmentMode",
+  "portOfLoading",
+  "portOfDischarge",
+  "finalDestination",
+  "notes"
+] as const;
+
+export async function updatePackingListDraft(
+  context: TenantContext,
+  packingListId: string,
+  input: PackingListDraftInput,
+  clearedKeys: readonly string[] = []
+) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:create");
 
@@ -312,6 +338,10 @@ export async function updatePackingListDraft(context: TenantContext, packingList
     if (input.version && input.version !== current.version) throw new Error("Packing list was changed elsewhere. Refresh and try again.");
 
     await validateMasterRefs(tx, tenant.organisationId, input);
+
+    const cleared = Object.fromEntries(
+      CLEARABLE_PACKING_FIELDS.filter((key) => clearedKeys.includes(key)).map((key) => [key, null])
+    );
 
     const packingList = await tx.packingList.update({
       where: { id: current.id },
@@ -328,6 +358,7 @@ export async function updatePackingListDraft(context: TenantContext, packingList
         portOfDischarge: input.portOfDischarge,
         finalDestination: input.finalDestination,
         notes: input.notes,
+        ...cleared,
         version: { increment: 1 },
         updatedById: tenant.userId
       }
@@ -359,17 +390,7 @@ export async function addPackingListLine(context: TenantContext, input: PackingL
     if (packingList.status !== "draft") throw new Error("Only draft packing lists can be edited.");
     if (packingList.version !== input.expectedVersion) throw new Error("Packing list was changed elsewhere. Refresh and try again.");
 
-    if (input.itemId) {
-      const item = await tx.item.findFirst({ where: { id: input.itemId, organisationId: tenant.organisationId } });
-      if (!item) throw new Error("Item not found.");
-    }
-
-    if (input.invoiceItemId) {
-      const invoiceItem = await tx.invoiceItem.findFirst({
-        where: { id: input.invoiceItemId, organisationId: tenant.organisationId }
-      });
-      if (!invoiceItem) throw new Error("Invoice item not found.");
-    }
+    await assertLineRefs(tx, tenant.organisationId, packingList.invoiceId, input);
 
     const line = await tx.packingListLine.create({
       data: {
@@ -445,10 +466,175 @@ export async function deletePackingListLine(context: TenantContext, input: Packi
   });
 }
 
+export async function updatePackingListLine(context: TenantContext, input: PackingListLineUpdateInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+
+  return prisma.$transaction(async (tx) => {
+    const packingList = await tx.packingList.findFirst({
+      where: { id: input.packingListId, organisationId: tenant.organisationId },
+      include: { lines: true }
+    });
+    if (!packingList) throw new Error("Packing list not found.");
+    if (packingList.status !== "draft") throw new Error("Only draft packing lists can be edited.");
+    if (packingList.version !== input.expectedVersion) throw new Error("Packing list was changed elsewhere. Refresh and try again.");
+
+    const line = packingList.lines.find((item) => item.id === input.lineId);
+    if (!line) throw new Error("Packing list line not found.");
+
+    await tx.packingListLine.update({
+      where: { id: line.id },
+      data: {
+        sortOrder: input.sortOrder,
+        packageNo: input.packageNo ?? null,
+        marksAndNumbers: input.marksAndNumbers ?? null,
+        sku: input.sku ?? null,
+        description: input.description,
+        hsnSac: input.hsnSac ?? null,
+        quantity: new Prisma.Decimal(input.quantity),
+        unitCode: input.unitCode ?? null,
+        netWeightKg: new Prisma.Decimal(input.netWeightKg),
+        grossWeightKg: new Prisma.Decimal(input.grossWeightKg),
+        lengthCm: input.lengthCm === undefined ? null : new Prisma.Decimal(input.lengthCm),
+        widthCm: input.widthCm === undefined ? null : new Prisma.Decimal(input.widthCm),
+        heightCm: input.heightCm === undefined ? null : new Prisma.Decimal(input.heightCm),
+        volumeCbm: lineVolumeCbm(input)
+      }
+    });
+
+    const updated = await updatePackingTotals(tx, packingList.id, tenant.organisationId, tenant.userId);
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "packing_list_line.update",
+        entityType: "packing_list_line",
+        entityId: line.id,
+        metadata: { packingListId: packingList.id }
+      }
+    });
+
+    return updated;
+  });
+}
+
+/** Moves an issued packing list back to draft. It keeps its number, and re-issuing reuses it. */
+export async function reopenPackingList(context: TenantContext, input: PackingListStatusInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:issue");
+
+  return prisma.$transaction(async (tx) => {
+    const packingList = await tx.packingList.findFirst({
+      where: { id: input.packingListId, organisationId: tenant.organisationId }
+    });
+    if (!packingList) throw new Error("Packing list not found.");
+    if (packingList.status !== "issued") throw new Error("Only issued packing lists can be reopened.");
+    if (packingList.version !== input.expectedVersion) throw new Error("Packing list was changed elsewhere. Refresh and try again.");
+
+    const reopened = await tx.packingList.update({
+      where: { id: packingList.id },
+      data: { status: "draft", updatedById: tenant.userId, version: { increment: 1 } }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "packing_list.reopen",
+        entityType: "packing_list",
+        entityId: packingList.id,
+        metadata: { packingListNumber: packingList.packingListNumber, reason: input.reason ?? null }
+      }
+    });
+
+    return reopened;
+  });
+}
+
+/** Cancels an issued packing list. The number stays used so it is never handed out again. */
+export async function cancelPackingList(context: TenantContext, input: PackingListStatusInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:cancel");
+  if (!input.reason) throw new Error("Enter a reason for cancelling.");
+
+  return prisma.$transaction(async (tx) => {
+    const packingList = await tx.packingList.findFirst({
+      where: { id: input.packingListId, organisationId: tenant.organisationId }
+    });
+    if (!packingList) throw new Error("Packing list not found.");
+    if (packingList.status !== "issued") throw new Error("Only issued packing lists can be cancelled. Delete a draft instead.");
+    if (packingList.version !== input.expectedVersion) throw new Error("Packing list was changed elsewhere. Refresh and try again.");
+
+    const cancelled = await tx.packingList.update({
+      where: { id: packingList.id },
+      data: { status: "cancelled", updatedById: tenant.userId, version: { increment: 1 } }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "packing_list.cancel",
+        entityType: "packing_list",
+        entityId: packingList.id,
+        metadata: { packingListNumber: packingList.packingListNumber, reason: input.reason }
+      }
+    });
+
+    return cancelled;
+  });
+}
+
+/** Deletes a draft that was never issued. Drafts that already hold a number must be cancelled instead. */
+export async function deletePackingListDraft(context: TenantContext, input: PackingListStatusInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+
+  return prisma.$transaction(async (tx) => {
+    const packingList = await tx.packingList.findFirst({
+      where: { id: input.packingListId, organisationId: tenant.organisationId }
+    });
+    if (!packingList) throw new Error("Packing list not found.");
+    if (packingList.status !== "draft") throw new Error("Only drafts can be deleted.");
+    if (packingList.packingListNumber) {
+      throw new Error("This draft already has number " + packingList.packingListNumber + ". Issue it again and cancel it instead.");
+    }
+
+    await tx.packingListLine.deleteMany({ where: { packingListId: packingList.id, organisationId: tenant.organisationId } });
+    await tx.packingList.delete({ where: { id: packingList.id } });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "packing_list.delete",
+        entityType: "packing_list",
+        entityId: packingList.id
+      }
+    });
+  });
+}
+
 export async function issuePackingList(context: TenantContext, input: PackingListIssueInput) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:issue");
 
+  // Two people issuing at once can pick the same next number; the unique index rejects one, so retry it.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await issuePackingListOnce(tenant, input);
+    } catch (error) {
+      const retryable = error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2002" || error.code === "P2034");
+      if (!retryable || attempt >= 3) throw error;
+    }
+  }
+}
+
+async function issuePackingListOnce(
+  tenant: TenantContext,
+  input: PackingListIssueInput
+) {
   return prisma.$transaction(async (tx) => {
     const packingList = await tx.packingList.findFirst({
       where: { id: input.packingListId, organisationId: tenant.organisationId },
@@ -460,18 +646,19 @@ export async function issuePackingList(context: TenantContext, input: PackingLis
     const requirements = packingListIssueRequirements(packingList);
     if (requirements.length > 0) throw new Error(`Before issuing: ${requirements.join(", ")}.`);
 
-    const year = packingList.packingListDate.getFullYear();
-    const start = new Date(Date.UTC(year, 0, 1));
-    const end = new Date(Date.UTC(year + 1, 0, 1));
-    const count = await tx.packingList.count({
-      where: {
-        organisationId: tenant.organisationId,
-        status: "issued",
-        packingListDate: { gte: start, lt: end }
-      }
-    });
-    const sequence = count + 1;
-    const packingListNumber = `PL/${year}/${String(sequence).padStart(4, "0")}`;
+    // A reopened packing list keeps the number it was first issued with.
+    let packingListNumber = packingList.packingListNumber;
+    let sequence = packingList.sequenceNumber;
+    if (!packingListNumber) {
+      const year = packingList.packingListDate.getUTCFullYear();
+      const prefix = `PL/${year}/`;
+      const last = await tx.packingList.aggregate({
+        where: { organisationId: tenant.organisationId, packingListNumber: { startsWith: prefix } },
+        _max: { sequenceNumber: true }
+      });
+      sequence = (last._max.sequenceNumber ?? 0) + 1;
+      packingListNumber = `${prefix}${String(sequence).padStart(4, "0")}`;
+    }
 
     const issued = await tx.packingList.update({
       where: { id: packingList.id },
@@ -497,7 +684,7 @@ export async function issuePackingList(context: TenantContext, input: PackingLis
     });
 
     return issued;
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
 export async function generatePackingListPdf(context: TenantContext, packingListId: string) {
@@ -506,8 +693,10 @@ export async function generatePackingListPdf(context: TenantContext, packingList
 
   const packingList = await getPackingList(context, packingListId);
   if (!packingList) throw new Error("Packing list not found.");
-  if (packingList.status !== "issued") throw new Error("Only issued packing lists can be generated as PDF.");
-  if (!packingList.packingListNumber) throw new Error("Issued packing list is missing its number.");
+  // Drafts render as a watermarked preview so the layout can be checked before finalising.
+  const isDraft = packingList.status === "draft";
+  if (!isDraft && !packingList.packingListNumber) throw new Error("Issued packing list is missing its number.");
+  const documentNumber = isDraft ? "DRAFT" : packingList.packingListNumber!;
 
   const [{ packingListPdfFilename, renderPackingListPdf }, { readPrivateDocument }] = await Promise.all([
     import("@/lib/packing-lists/packing-list-pdf"),
@@ -518,7 +707,7 @@ export async function generatePackingListPdf(context: TenantContext, packingList
     packingList.company?.signatureAsset ? readAssetForPdf(readPrivateDocument, packingList.company.signatureAsset) : Promise.resolve(null)
   ]);
   const buffer = await renderPackingListPdf({
-    packingListNumber: packingList.packingListNumber,
+    packingListNumber: documentNumber,
     packingListDate: packingList.packingListDate,
     invoiceNumber: packingList.invoice?.invoiceNumber,
     invoiceDate: packingList.invoice?.invoiceDate,
@@ -557,8 +746,13 @@ export async function generatePackingListPdf(context: TenantContext, packingList
       grossWeightKg: packingList.totalGrossWeightKg.toString(),
       volumeCbm: packingList.totalVolumeCbm.toString()
     },
-    notes: packingList.notes
+    notes: packingList.notes,
+    draft: isDraft
   });
+
+  if (isDraft) {
+    return { buffer, filename: `packing-list-draft-preview.pdf` };
+  }
 
   await prisma.auditLog.create({
     data: {
@@ -571,7 +765,7 @@ export async function generatePackingListPdf(context: TenantContext, packingList
     }
   });
 
-  return { buffer, filename: packingListPdfFilename(packingList.packingListNumber) };
+  return { buffer, filename: packingListPdfFilename(documentNumber) };
 }
 
 export function packingListIssueRequirements(packingList: {
@@ -601,6 +795,24 @@ export function shipmentNeedsPorts(shipmentMode: string | null | undefined) {
   const mode = (shipmentMode || "").toLowerCase();
   if (!mode) return true;
   return !/(road|truck|lorry|courier|hand|rail|train|tempo|local)/.test(mode);
+}
+
+async function assertLineRefs(
+  tx: Prisma.TransactionClient,
+  organisationId: string,
+  invoiceId: string | null,
+  input: { itemId?: string; invoiceItemId?: string }
+) {
+  if (input.itemId) {
+    const item = await tx.item.count({ where: { id: input.itemId, organisationId } });
+    if (!item) throw new Error("Item not found.");
+  }
+
+  if (input.invoiceItemId) {
+    if (!invoiceId) throw new Error("This packing list is not linked to an invoice.");
+    const invoiceItem = await tx.invoiceItem.count({ where: { id: input.invoiceItemId, organisationId, invoiceId } });
+    if (!invoiceItem) throw new Error("That line does not belong to the linked invoice.");
+  }
 }
 
 async function validateMasterRefs(

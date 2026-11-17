@@ -51,6 +51,8 @@ export type PackingListPdfData = {
     volumeCbm: string | number;
   };
   notes?: string | null;
+  /** Draws a "DRAFT" watermark on every page (used for previews of unissued packing lists). */
+  draft?: boolean;
 };
 
 const page = { margin: 28, right: 567, bottom: 812 };
@@ -79,6 +81,7 @@ export function renderPackingListPdf(data: PackingListPdfData): Promise<Buffer> 
 
     drawPackingList(doc, data);
     addPageNumbers(doc);
+    if (data.draft) addDraftWatermark(doc);
     doc.end();
   });
 }
@@ -288,6 +291,19 @@ function drawPlainCell(doc: PDFKit.PDFDocument, x: number, y: number, width: num
     align,
     ellipsis: true
   });
+}
+
+function addDraftWatermark(doc: PDFKit.PDFDocument) {
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i += 1) {
+    doc.switchToPage(i);
+    doc.save();
+    doc.rotate(-35, { origin: [297, 421] });
+    doc.font("Helvetica-Bold").fontSize(96).fillColor("#c53030").fillOpacity(0.08);
+    doc.text("DRAFT", 297 - 260, 421 - 48, { width: 520, align: "center", lineBreak: false });
+    doc.restore();
+  }
+  doc.fillOpacity(1);
 }
 
 function addPageNumbers(doc: PDFKit.PDFDocument) {

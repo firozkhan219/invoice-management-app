@@ -1,5 +1,5 @@
-import { handleTenantForm, idPath, parseForm } from "@/lib/http/form";
-import { createPackingListDraft, updatePackingListDraft } from "@/lib/packing-lists/packing-list-service";
+import { blankKeys, handleTenantForm, idPath, parseForm } from "@/lib/http/form";
+import { CLEARABLE_PACKING_FIELDS, createPackingListDraft, updatePackingListDraft } from "@/lib/packing-lists/packing-list-service";
 import { packingListDraftSchema } from "@/lib/validation/packing-lists";
 
 export async function POST(request: Request) {
@@ -9,7 +9,7 @@ export async function POST(request: Request) {
       const input = parseForm(packingListDraftSchema, fields);
       const packingListId = typeof fields.packingListId === "string" ? fields.packingListId : "";
       const packingList = packingListId
-        ? await updatePackingListDraft(context, packingListId, input)
+        ? await updatePackingListDraft(context, packingListId, input, blankKeys(fields, CLEARABLE_PACKING_FIELDS))
         : await createPackingListDraft(context, input);
       return `/packing-lists/${packingList.id}`;
     }

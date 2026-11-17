@@ -53,10 +53,44 @@ export const numberSeriesSchema = z.object({
 
 export const numberSeriesActionSchema = z.object({
   seriesId: z.string().uuid(),
-  action: z.enum(["make_default", "deactivate"])
+  action: z.enum(["make_default", "deactivate", "reactivate"]),
+  kind: z.enum(["invoice", "credit_note"]).default("invoice")
+});
+
+/** Settings a user may blank out; an empty submitted value for these is saved as null. */
+export const CLEARABLE_SETTINGS_FIELDS = [
+  "defaultCompanyId",
+  "defaultBankAccountId",
+  "defaultDeclaration",
+  "defaultNotes",
+  "paymentTerms",
+  "deliveryTerms",
+  "pdfFooter"
+] as const;
+
+export const organisationProfileSchema = z.object({
+  name: z.string().trim().min(2).max(180),
+  locale: z.string().trim().regex(/^[a-z]{2,3}(-[A-Z]{2})?$/, "Use a locale like en-IN.").max(20),
+  timeZone: z.string().trim().min(3).max(80).refine((value) => {
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Unknown time zone."),
+  defaultCurrency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "Use a 3-letter currency code like INR."),
+  financialYearStart: z.coerce.number().int().min(1).max(12)
+});
+
+export const lockedPeriodActionSchema = z.object({
+  lockedPeriodId: z.string().uuid(),
+  action: z.enum(["deactivate", "reactivate"])
 });
 
 export type OrganisationSettingsInput = z.infer<typeof organisationSettingsSchema>;
 export type LockedPeriodInput = z.infer<typeof lockedPeriodSchema>;
 export type NumberSeriesInput = z.infer<typeof numberSeriesSchema>;
 export type NumberSeriesActionInput = z.infer<typeof numberSeriesActionSchema>;
+export type OrganisationProfileInput = z.infer<typeof organisationProfileSchema>;
+export type LockedPeriodActionInput = z.infer<typeof lockedPeriodActionSchema>;
