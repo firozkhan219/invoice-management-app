@@ -64,6 +64,8 @@ export type InvoicePdfData = {
   };
   notes?: string | null;
   declaration?: string | null;
+  /** Draws a "DRAFT" watermark on every page (previews of unissued invoices). */
+  draft?: boolean;
 };
 
 // A4 is 595.28 x 841.89 pt. Content stays inside the margins; the footer sits below contentBottom.
@@ -109,6 +111,7 @@ export function renderInvoicePdf(data: InvoicePdfData): Promise<Buffer> {
 
     drawInvoice(doc, data);
     addFooters(doc, data);
+    if (data.draft) addDraftWatermark(doc);
     doc.end();
   });
 }
@@ -474,6 +477,21 @@ function sectionLabel(doc: PDFKit.PDFDocument, label: string, x: number, y: numb
     characterSpacing: 0.6,
     lineBreak: false
   });
+}
+
+function addDraftWatermark(doc: PDFKit.PDFDocument) {
+  const range = doc.bufferedPageRange();
+  const cx = page.width / 2;
+  const cy = page.height / 2;
+  for (let i = range.start; i < range.start + range.count; i += 1) {
+    doc.switchToPage(i);
+    doc.save();
+    doc.rotate(-35, { origin: [cx, cy] });
+    doc.font("Helvetica-Bold").fontSize(96).fillColor("#c53030").fillOpacity(0.08);
+    doc.text("DRAFT", cx - 260, cy - 48, { width: 520, align: "center", lineBreak: false });
+    doc.restore();
+  }
+  doc.fillOpacity(1);
 }
 
 function addFooters(doc: PDFKit.PDFDocument, data: InvoicePdfData) {

@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db/prisma";
+import { lockInvoiceRow, prisma } from "@/lib/db/prisma";
 import { calculateInvoiceTotals, type TaxModeInput } from "@/lib/invoices/calculation";
 import { bankRecordForDocument } from "@/lib/companies/bank-document";
 import { settlementState } from "@/lib/payments/payment-status";
@@ -10,6 +10,8 @@ import { requireTenantContext, type TenantContext } from "@/lib/repositories/ten
 import { financialYearLabel } from "@/lib/settings/financial-year";
 import { periodRangeForRule, planSequence, renderInvoiceNumber } from "@/lib/settings/number-series";
 import type {
+  CreditNoteCancelInput,
+  CreditNoteDeleteInput,
   CreditNoteDraftInput,
   CreditNoteIssueInput,
   CreditNoteLineDeleteInput,
@@ -307,7 +309,7 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
       });
       if (!draft) throw new Error("Credit note not found.");
       // Lock the original invoice so credits and payments against it are applied one at a time.
-      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${draft.originalInvoiceId} FOR UPDATE`;
+      await lockInvoiceRow(tx, draft.originalInvoiceId);
 
       const creditNote = await tx.creditNote.findFirstOrThrow({
         where: { id: input.creditNoteId, organisationId: tenant.organisationId },
@@ -438,6 +440,95 @@ export async function issueCreditNote(context: TenantContext, input: CreditNoteI
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
   );
+}
+
+/**
+ * Cancels an issued credit note and gives its amount back to the original invoice's balance.
+ * The number stays used so it is never issued again.
+ */
+export async function cancelCreditNote(context: TenantContext, input: CreditNoteCancelInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:cancel");
+
+  return prisma.$transaction(
+    async (tx) => {
+      const creditNote = await tx.creditNote.findFirst({
+        where: { id: input.creditNoteId, organisationId: tenant.organisationId },
+        include: { originalInvoice: true }
+      });
+      if (!creditNote) throw new Error("Credit note not found.");
+      if (creditNote.status !== "issued") throw new Error("Only issued credit notes can be cancelled. Delete a draft instead.");
+      await assertDateNotLocked(tx, tenant.organisationId, creditNote.creditNoteDate, "cancel this credit note");
+
+      const invoice = creditNote.originalInvoice;
+      const creditedTotal = Prisma.Decimal.max(invoice.creditedTotal.sub(creditNote.grandTotal), 0);
+      const settlement = settlementState(invoice.grandTotal, invoice.paidTotal, creditedTotal, invoice.status);
+
+      const cancelled = await tx.creditNote.update({
+        where: { id: creditNote.id },
+        data: { status: "cancelled", updatedById: tenant.userId }
+      });
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          creditedTotal,
+          balanceDue: settlement.balanceDue,
+          status: settlement.status,
+          updatedById: tenant.userId,
+          version: { increment: 1 }
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          organisationId: tenant.organisationId,
+          actorUserId: tenant.userId,
+          action: "credit_note.cancel",
+          entityType: "credit_note",
+          entityId: creditNote.id,
+          metadata: {
+            creditNoteNumber: creditNote.creditNoteNumber,
+            originalInvoiceId: invoice.id,
+            reason: input.reason,
+            creditedTotal: creditedTotal.toString()
+          }
+        }
+      });
+
+      return cancelled;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+  );
+}
+
+/** Deletes a credit note draft and its lines. Issued or cancelled notes are kept for the record. */
+export async function deleteCreditNoteDraft(context: TenantContext, input: CreditNoteDeleteInput) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+
+  return prisma.$transaction(async (tx) => {
+    const creditNote = await tx.creditNote.findFirst({
+      where: { id: input.creditNoteId, organisationId: tenant.organisationId }
+    });
+    if (!creditNote) throw new Error("Credit note not found.");
+    if (creditNote.status !== "draft") throw new Error("Only draft credit notes can be deleted.");
+
+    await tx.creditNoteLine.deleteMany({ where: { creditNoteId: creditNote.id, organisationId: tenant.organisationId } });
+    await tx.creditNote.delete({ where: { id: creditNote.id } });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "credit_note.delete",
+        entityType: "credit_note",
+        entityId: creditNote.id,
+        metadata: { originalInvoiceId: creditNote.originalInvoiceId }
+      }
+    });
+
+    return creditNote;
+  });
 }
 
 export async function createCreditNoteNumberSeries(context: TenantContext, input: CreditNoteNumberSeriesInput) {

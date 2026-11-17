@@ -44,6 +44,17 @@ export const creditNoteNumberSeriesSchema = z.object({
   isActive: z.coerce.boolean().default(true)
 });
 
+export const creditNoteCancelSchema = z.object({
+  creditNoteId: z.string().uuid(),
+  reason: z.string().trim().min(3).max(500)
+});
+
+export const creditNoteDeleteSchema = z.object({
+  creditNoteId: z.string().uuid()
+});
+
+export type CreditNoteCancelInput = z.infer<typeof creditNoteCancelSchema>;
+export type CreditNoteDeleteInput = z.infer<typeof creditNoteDeleteSchema>;
 export type CreditNoteDraftInput = z.infer<typeof creditNoteDraftSchema>;
 export type CreditNoteUpdateInput = z.infer<typeof creditNoteUpdateSchema>;
 export type CreditNoteLineInput = z.infer<typeof creditNoteLineSchema>;

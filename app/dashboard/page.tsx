@@ -88,6 +88,7 @@ export default async function DashboardPage() {
               <span className="kpi-icon"><AlertTriangle size={18} /></span>
             </div>
             <strong>{summary.overdueInvoices}</strong>
+            {summary.overdueInvoices > 0 ? <Link className="stat-link" href="/invoices?status=overdue">View overdue</Link> : null}
           </div>
           <div className="stat accent">
             <div className="kpi-row">

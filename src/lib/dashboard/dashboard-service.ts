@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { overdueInvoiceWhere } from "@/lib/invoices/invoice-service";
 import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
 
@@ -39,12 +40,7 @@ export async function getDashboardSummary(context: TenantContext) {
     _sum: { balanceDue: true }
   });
   const overdueInvoices = await prisma.invoice.count({
-    where: {
-      organisationId: tenant.organisationId,
-      status: { in: ["issued", "partially_paid"] },
-      dueDate: { lt: now },
-      balanceDue: { gt: new Prisma.Decimal(0) }
-    }
+    where: { organisationId: tenant.organisationId, ...overdueInvoiceWhere(now) }
   });
   const draftInvoices = await prisma.invoice.count({
     where: {

@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db/prisma";
+import { lockInvoiceRow, prisma } from "@/lib/db/prisma";
 import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
 import { assertPaymentWithinBalance, settlementState } from "@/lib/payments/payment-status";
@@ -52,7 +52,7 @@ export async function recordPayment(context: TenantContext, input: PaymentInput)
     }
 
     // Lock the invoice row so concurrent payments are applied one after another.
-    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} AND organisation_id = ${tenant.organisationId} FOR UPDATE`;
+    await lockInvoiceRow(tx, input.invoiceId, tenant.organisationId);
 
     if (input.idempotencyKey) {
       const existing = await findByIdempotencyKey(tx, tenant.organisationId, input.idempotencyKey);
@@ -170,7 +170,7 @@ export async function reversePayment(context: TenantContext, input: ReversePayme
     if (flipped.count === 0) throw new Error("Payment is already reversed.");
 
     for (const allocation of payment.allocations) {
-      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${allocation.invoiceId} FOR UPDATE`;
+      await lockInvoiceRow(tx, allocation.invoiceId);
       const invoice = await tx.invoice.findUniqueOrThrow({ where: { id: allocation.invoiceId } });
       const paidTotal = Prisma.Decimal.max(invoice.paidTotal.sub(allocation.amount), new Prisma.Decimal(0));
       const { balanceDue: balance, status } = settlementState(invoice.grandTotal, paidTotal, invoice.creditedTotal, invoice.status);
