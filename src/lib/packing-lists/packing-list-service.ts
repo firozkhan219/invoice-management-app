@@ -912,6 +912,7 @@ type AddressLike = {
   postcode: string;
   country: string;
   phone: string | null;
+  contactPerson: string | null;
 };
 
 /**
@@ -939,7 +940,8 @@ function consigneeWithAddress(packingList: {
     state: address.state,
     postcode: address.postcode,
     country: address.country,
-    phone: (partyFields.phone as string | null) || address.phone
+    phone: (partyFields.phone as string | null) || address.phone,
+    contactPerson: address.contactPerson || (partyFields.contactPerson as string | null)
   };
 }
 

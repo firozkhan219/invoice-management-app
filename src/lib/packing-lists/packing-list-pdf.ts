@@ -1,4 +1,5 @@
 import PDFDocument from "pdfkit";
+import { consigneeLines, drawExportHeader, drawExportTitle, exporterReference, headerDate, partyName, text } from "@/lib/documents/export-header-pdf";
 import { cartonRangeLabel, lineCartonCount } from "@/lib/packing-lists/calculation";
 
 type JsonRecord = Record<string, unknown>;
@@ -134,109 +135,42 @@ function drawPackingList(doc: PDFKit.PDFDocument, data: PackingListPdfData) {
 }
 
 function drawTitle(doc: PDFKit.PDFDocument, title: string) {
-  doc.fillColor(colors.ink).font("Helvetica-Bold").fontSize(12).text(title, left, 24, { width, align: "center" });
+  drawExportTitle(doc, title, left, width, 24);
 }
 
-/** Export header: exporter / references, consignee / buyer, then carriage and route boxes. */
+/** Export header grid shared with the invoice PDFs. */
 function drawHeaderGrid(doc: PDFKit.PDFDocument, data: PackingListPdfData, top: number): number {
-  const leftW = 290;
-  const rightX = left + leftW;
-  const rightW = width - leftW;
   const company = data.company;
-  const companyName = text(company, "legalName", "Company");
-
-  // Block 1: exporter | invoice no. & date, exporter's ref, buyer's order, buyer (if other than consignee)
-  const block1 = 96;
-  box(doc, left, top, leftW, block1);
-  label(doc, "EXPORTER", left, top);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(colors.ink).text(companyName, left + 4, top + 12, { width: leftW - 60 });
-  const companyLines = [
-    ...addressLines(company),
-    text(company, "phone") ? `Tel#: ${text(company, "phone")}` : "",
-    text(company, "email")
-  ].filter(Boolean);
-  doc.font("Helvetica-Bold").fontSize(7.8).text(companyLines.join("\n"), left + 4, doc.y + 1, { width: leftW - 60, height: block1 - (doc.y - top) - 4, ellipsis: true });
-  drawLogo(doc, left + leftW - 52, top + 8, data.logo);
-
-  const invoiceW = rightW * 0.6;
-  box(doc, rightX, top, invoiceW, 30);
-  label(doc, "Invoice No. & Date", rightX, top);
-  value(doc, invoiceReference(data), rightX, top, invoiceW);
-  box(doc, rightX + invoiceW, top, rightW - invoiceW, 30);
-  label(doc, "Exporter's Ref.", rightX + invoiceW, top);
-  value(doc, data.exportReference || (text(company, "iec") ? `IEC # ${text(company, "iec")}` : ""), rightX + invoiceW, top, rightW - invoiceW);
-
-  box(doc, rightX, top + 30, rightW, 33);
-  label(doc, "Buyer's Order No. & Date", rightX, top + 30);
-  value(doc, [data.buyerOrderNumber, data.buyerOrderDate ? `DT: ${formatDate(data.buyerOrderDate)}` : ""].filter(Boolean).join(" "), rightX, top + 30, rightW);
-
-  box(doc, rightX, top + 63, rightW, block1 - 63);
-  label(doc, "Buyer (if other than consignee)", rightX, top + 63);
-  const buyerIsConsignee = !data.consignee || text(data.consignee, "id") === text(data.buyer, "id");
-  value(doc, buyerIsConsignee ? "" : partyName(data.buyer), rightX, top + 63, rightW);
-
-  // Block 2: consignee | packing list no., GSTIN | country of origin / final destination
-  const top2 = top + block1;
-  const block2 = 92;
   const consignee = data.consignee || data.buyer;
-  box(doc, left, top2, leftW, block2);
-  label(doc, "Consignee", left, top2);
-  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(colors.ink).text(partyName(consignee), left + 4, top2 + 12, { width: leftW - 8 });
-  const consigneeLines = [
-    ...addressLines(consignee),
-    text(consignee, "phone") ? `TEL: ${text(consignee, "phone")}` : ""
-  ].filter(Boolean);
-  doc.font("Helvetica-Bold").fontSize(7.8).text(consigneeLines.join("\n"), left + 4, doc.y + 1, { width: leftW - 8, height: block2 - (doc.y - top2) - 4, ellipsis: true });
-
-  box(doc, rightX, top2, rightW, block2 - 30);
-  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(colors.ink).text(
-    [
-      `PACKING LIST NO. ${data.packingListNumber} DT: ${formatDate(data.packingListDate)}`,
+  const buyerIsConsignee = !data.consignee || text(data.consignee, "id") === text(data.buyer, "id");
+  return drawExportHeader(doc, {
+    left,
+    width,
+    top,
+    company,
+    logo: data.logo,
+    referenceLabel: "Invoice No. & Date",
+    referenceValue: data.invoiceNumber ? `${data.invoiceNumber}${data.invoiceDate ? ` DT: ${headerDate(data.invoiceDate)}` : ""}` : "",
+    exporterRef: exporterReference(data.exportReference, company),
+    buyerOrder: [data.buyerOrderNumber, data.buyerOrderDate ? `DT: ${headerDate(data.buyerOrderDate)}` : ""].filter(Boolean).join(" "),
+    buyerIfOther: buyerIsConsignee ? "" : partyName(data.buyer),
+    consigneeName: partyName(consignee),
+    consigneeLines: consigneeLines(consignee, null),
+    facts: [
+      `PACKING LIST NO. ${data.packingListNumber} DT: ${headerDate(data.packingListDate)}`,
       text(company, "gstin") ? `GST NO - ${text(company, "gstin")}` : "",
-      data.containerNumber || data.sealNumber
-        ? `CONTAINER: ${data.containerNumber || "-"}   SEAL: ${data.sealNumber || "-"}`
-        : ""
-    ].filter(Boolean).join("\n"),
-    rightX + 6,
-    top2 + 10,
-    { width: rightW - 12, lineGap: 3 }
-  );
-  const half = rightW / 2;
-  box(doc, rightX, top2 + block2 - 30, half, 30);
-  label(doc, "Country of Origin", rightX, top2 + block2 - 30);
-  value(doc, (data.countryOfOrigin || "India").toUpperCase(), rightX, top2 + block2 - 30, half);
-  box(doc, rightX + half, top2 + block2 - 30, rightW - half, 30);
-  label(doc, "Country of final destination", rightX + half, top2 + block2 - 30);
-  value(doc, (data.countryOfFinalDestination || data.finalDestination || "").toUpperCase(), rightX + half, top2 + block2 - 30, rightW - half);
-
-  // Block 3: carriage and route (2 x 3 small boxes) | terms of delivery and payment
-  const top3 = top2 + block2;
-  const cell = 26;
-  const smallW = leftW / 2;
-  const route: [string, string | null | undefined][] = [
-    ["Pre-Carriage by", data.preCarriageBy || data.shipmentMode],
-    ["Place of Receipt by Pre-Carrier", data.placeOfReceipt],
-    ["Vessel/Flight No.", data.vesselFlightNo],
-    ["Port of loading", data.portOfLoading],
-    ["Port of discharge", data.portOfDischarge],
-    ["Port of final destination", data.finalDestination]
-  ];
-  route.forEach(([title, content], index) => {
-    const x = left + (index % 2) * smallW;
-    const y = top3 + Math.floor(index / 2) * cell;
-    box(doc, x, y, smallW, cell);
-    label(doc, title, x, y);
-    value(doc, (content || "").toUpperCase(), x, y, smallW);
+      data.containerNumber || data.sealNumber ? `CONTAINER: ${data.containerNumber || "-"}   SEAL: ${data.sealNumber || "-"}` : ""
+    ],
+    countryOfOrigin: data.countryOfOrigin || "India",
+    countryOfFinalDestination: data.countryOfFinalDestination || data.finalDestination || "",
+    preCarriageBy: data.preCarriageBy || data.shipmentMode,
+    placeOfReceipt: data.placeOfReceipt,
+    vesselFlightNo: data.vesselFlightNo,
+    portOfLoading: data.portOfLoading,
+    portOfDischarge: data.portOfDischarge,
+    finalDestination: data.finalDestination,
+    termsOfDelivery: data.termsOfDelivery
   });
-  box(doc, rightX, top3, rightW, cell * 3);
-  doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text("Terms of delivery and payment", rightX, top3 + 3, { width: rightW, align: "center" });
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(colors.ink).text(data.termsOfDelivery || "", rightX + 6, top3 + 15, {
-    width: rightW - 12,
-    height: cell * 3 - 18,
-    ellipsis: true
-  });
-
-  return top3 + cell * 3;
 }
 
 function drawTableHeader(doc: PDFKit.PDFDocument, y: number) {
@@ -384,32 +318,10 @@ function box(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number
   doc.lineWidth(0.6).rect(x, y, w, h).stroke(colors.rule);
 }
 
-function label(doc: PDFKit.PDFDocument, title: string, x: number, y: number) {
-  doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text(title, x + 4, y + 3, { lineBreak: false });
-}
 
-function value(doc: PDFKit.PDFDocument, content: string, x: number, y: number, w: number) {
-  if (!content) return;
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(colors.ink).text(content, x + 4, y + 13, { width: w - 8, lineBreak: false, ellipsis: true });
-}
 
-function invoiceReference(data: PackingListPdfData): string {
-  if (!data.invoiceNumber) return "";
-  return `${data.invoiceNumber}${data.invoiceDate ? ` DT: ${formatDate(data.invoiceDate)}` : ""}`;
-}
 
-function partyName(record: JsonRecord | null): string {
-  return (text(record, "legalName") || text(record, "displayName") || "-").toUpperCase();
-}
 
-function drawLogo(doc: PDFKit.PDFDocument, x: number, y: number, logo: PackingListPdfData["logo"]) {
-  if (!logo || !canDrawImage(logo.mimeType)) return;
-  try {
-    doc.image(logo.data, x, y, { fit: [46, 46], align: "center", valign: "center" });
-  } catch {
-    // An unreadable logo is skipped; the exporter name is already printed.
-  }
-}
 
 function drawSignatureImage(
   doc: PDFKit.PDFDocument,
@@ -458,23 +370,8 @@ function canDrawImage(mimeType: string): boolean {
   return mimeType === "image/png" || mimeType === "image/jpeg" || mimeType === "image/jpg";
 }
 
-function text(record: JsonRecord | null | undefined, key: string, fallback = ""): string {
-  const raw = record?.[key];
-  return typeof raw === "string" || typeof raw === "number" ? String(raw) : fallback;
-}
 
-function addressLines(record: JsonRecord | null): string[] {
-  const place = [text(record, "city"), text(record, "state")].filter(Boolean).join(", ");
-  return [
-    [text(record, "addressLine1"), text(record, "addressLine2")].filter(Boolean).join(", "),
-    [place, text(record, "postcode")].filter(Boolean).join(" - "),
-    text(record, "country")
-  ].filter(Boolean).map((line) => line.toUpperCase());
-}
 
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" }).format(date);
-}
 
 function formatQty(raw: Num): string {
   return Number(raw || 0).toLocaleString("en-IN", { maximumFractionDigits: 4 });

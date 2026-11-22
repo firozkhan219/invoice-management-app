@@ -1,4 +1,5 @@
 import PDFDocument from "pdfkit";
+import { consigneeLines, drawExportHeader, drawExportTitle, exporterReference, headerDate, partyName } from "@/lib/documents/export-header-pdf";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -122,145 +123,56 @@ export function invoicePdfFilename(invoiceNumber: string): string {
 
 function drawInvoice(doc: PDFKit.PDFDocument, data: InvoicePdfData) {
   doc.fillColor(colors.ink);
-  let y = drawHeader(doc, data, page.margin);
-  y = drawParties(doc, data, y + 14);
-  y = drawShipmentDetails(doc, data, y + 12);
-  y = drawItemsTable(doc, data, y + 14);
+  drawExportTitle(doc, data.documentTitle || "Tax Invoice", left, contentWidth, 18);
+  let y = drawHeader(doc, data, 36);
+  y = drawItemsTable(doc, data, y + 12);
   y = drawTotals(doc, data, y + 12);
   drawBankAndSignature(doc, data, y + 14);
 }
 
-/* ---------- Header: company on the left, document facts on the right ---------- */
+/* ---------- Header: the ruled export grid shared with the packing list ---------- */
 
-function drawHeader(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
+function drawHeader(doc: PDFKit.PDFDocument, data: InvoicePdfData, top: number): number {
   const isCredit = data.documentTitle === "Credit Note";
-  const companyName = text(data.company, "legalName", "Company");
-  const metaWidth = 196;
-  const metaX = right - metaWidth;
+  const isProforma = data.documentTitle === "Proforma Invoice";
+  const company = data.company;
+  const consignee = data.consignee || data.buyer;
+  const shipTo = data.shippingAddress || data.billingAddress;
+  const consigneeIsBuyer = !data.consignee || text(data.consignee, "id") === text(data.buyer, "id");
+  const destinationCountry = text(data.shippingAddress, "country", text(data.billingAddress, "country", text(data.buyer, "country", "")));
 
-  // Left: logo (or initials) then company details.
-  const markSize = 46;
-  drawBrandMark(doc, left, y, markSize, companyName, data.logo);
-  const companyX = left + markSize + 12;
-  const companyWidth = metaX - companyX - 16;
-  let leftY = y;
-  doc.font("Helvetica-Bold").fontSize(13).fillColor(colors.ink);
-  doc.text(companyName, companyX, leftY, { width: companyWidth });
-  leftY = doc.y + 2;
-  const tradingName = text(data.company, "tradingName");
-  if (tradingName && tradingName !== companyName) {
-    doc.font("Helvetica").fontSize(8.5).fillColor(colors.muted).text(tradingName, companyX, leftY, { width: companyWidth });
-    leftY = doc.y + 2;
-  }
-  const companyLines = [
-    ...formatAddressLines(data.company),
-    ids(data.company).join("   ")
-  ].filter(Boolean);
-  doc.font("Helvetica").fontSize(8).fillColor(colors.body).text(companyLines.join("\n"), companyX, leftY, {
-    width: companyWidth,
-    lineGap: 1.5
+  return drawExportHeader(doc, {
+    left,
+    width: contentWidth,
+    top,
+    company,
+    logo: data.logo,
+    referenceLabel: isCredit ? "Credit Note No. & Date" : isProforma ? "Proforma No. & Date" : "Invoice No. & Date",
+    referenceValue: `${data.invoiceNumber} DT: ${headerDate(data.invoiceDate)}`,
+    exporterRef: exporterReference(data.exporterReference, company),
+    buyerOrder: [data.buyerOrderNumber, data.buyerOrderDate ? `DT: ${headerDate(data.buyerOrderDate)}` : ""].filter(Boolean).join(" "),
+    buyerIfOther: consigneeIsBuyer ? "" : partyName(data.buyer),
+    consigneeName: partyName(consignee),
+    consigneeLines: consigneeLines(consignee, shipTo),
+    facts: [
+      text(company, "gstin") ? `GST NO - ${text(company, "gstin")}` : "",
+      isCredit && data.originalInvoiceNumber
+        ? `AGAINST INVOICE ${data.originalInvoiceNumber}${data.originalInvoiceDate ? ` DT: ${headerDate(data.originalInvoiceDate)}` : ""}`
+        : "",
+      text(data.buyer, "gstin") ? `BUYER GSTIN - ${text(data.buyer, "gstin")}` : "",
+      data.dueDate && !isCredit ? `DUE DATE: ${headerDate(data.dueDate)}` : "",
+      data.currency && data.currency !== "INR" ? `CURRENCY: ${data.currency}` : ""
+    ],
+    countryOfOrigin: text(company, "country", "India"),
+    countryOfFinalDestination: destinationCountry || data.finalDestination || "",
+    preCarriageBy: data.preCarriageBy,
+    placeOfReceipt: data.placeOfReceipt,
+    vesselFlightNo: data.vesselFlightNo,
+    portOfLoading: data.portOfLoading,
+    portOfDischarge: data.portOfDischarge,
+    finalDestination: data.finalDestination,
+    termsOfDelivery: data.termsOfDelivery
   });
-  leftY = Math.max(doc.y, y + markSize);
-
-  // Right: title and key facts as label / value rows.
-  const title = (data.documentTitle || "Tax Invoice").toUpperCase();
-  doc.font("Helvetica-Bold").fontSize(18).fillColor(colors.accent).text(title, metaX, y - 2, {
-    width: metaWidth,
-    align: "right",
-    characterSpacing: 0.6
-  });
-  let rightY = doc.y + 6;
-  const facts: Array<[string, string]> = [
-    [isCredit ? "Credit note no." : data.documentTitle === "Proforma Invoice" ? "Proforma no." : "Invoice no.", data.invoiceNumber],
-    ["Date", formatDate(data.invoiceDate)],
-    ["Due date", data.dueDate ? formatDate(data.dueDate) : ""],
-    isCredit
-      ? ["Original invoice", [data.originalInvoiceNumber, data.originalInvoiceDate ? formatDate(data.originalInvoiceDate) : ""].filter(Boolean).join(" · ")]
-      : ["Buyer order", [data.buyerOrderNumber, data.buyerOrderDate ? formatDate(data.buyerOrderDate) : ""].filter(Boolean).join(" · ")],
-    ["Exporter ref.", data.exporterReference || ""]
-  ];
-  facts.filter(([, value]) => value).forEach(([label, value], index) => {
-    const bold = index === 0;
-    doc.font("Helvetica").fontSize(8).fillColor(colors.muted).text(label, metaX, rightY + 1, { width: 80 });
-    doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(bold ? 9.5 : 8.5).fillColor(colors.ink)
-      .text(value, metaX + 80, rightY, { width: metaWidth - 80, align: "right" });
-    rightY = Math.max(doc.y, rightY + 12) + 3;
-  });
-
-  const bottom = Math.max(leftY, rightY) + 12;
-  doc.save().moveTo(left, bottom).lineTo(right, bottom).lineWidth(1.4).strokeColor(colors.accent).stroke().restore();
-  return bottom;
-}
-
-/* ---------- Bill to / Ship to ---------- */
-
-function drawParties(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
-  const gap = 24;
-  const colWidth = (contentWidth - gap) / 2;
-  const buyerName = text(data.buyer, "displayName", text(data.buyer, "legalName", "-"));
-  const shipName = text(data.consignee, "displayName", buyerName);
-  const shipLines = data.shippingAddress ? formatAddressLines(data.shippingAddress) : ["Same as billing address"];
-
-  const billBottom = drawParty(doc, left, y, colWidth, "Bill to", buyerName, [
-    ...formatAddressLines(data.billingAddress),
-    ids(data.buyer).join("   ")
-  ]);
-  const shipBottom = drawParty(doc, left + colWidth + gap, y, colWidth, "Ship to / consignee", shipName, [
-    ...shipLines,
-    ids(data.consignee).join("   ")
-  ]);
-  return Math.max(billBottom, shipBottom);
-}
-
-function drawParty(doc: PDFKit.PDFDocument, x: number, y: number, width: number, label: string, name: string, lines: string[]): number {
-  sectionLabel(doc, label, x, y, width);
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(colors.ink).text(name, x, y + 14, { width });
-  const rest = lines.filter(Boolean);
-  if (rest.length) {
-    doc.font("Helvetica").fontSize(8.5).fillColor(colors.body).text(rest.join("\n"), x, doc.y + 2, { width, lineGap: 1.5 });
-  }
-  return doc.y;
-}
-
-/* ---------- Shipment details: only the fields that are filled in ---------- */
-
-function drawShipmentDetails(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): number {
-  const destinationCountry = text(data.shippingAddress, "country", text(data.buyer, "country", ""));
-  const fields: Array<[string, string]> = ([
-    ["Country of origin", text(data.company, "country", "India")],
-    ["Country of final destination", destinationCountry],
-    ["Pre-carriage by", data.preCarriageBy || ""],
-    ["Place of receipt", data.placeOfReceipt || ""],
-    ["Vessel / flight no.", data.vesselFlightNo || ""],
-    ["Port of loading", data.portOfLoading || ""],
-    ["Port of discharge", data.portOfDischarge || ""],
-    ["Final destination", data.finalDestination || ""],
-    ["Terms of delivery & payment", data.termsOfDelivery || ""]
-  ] as Array<[string, string]>).filter(([, value]) => value);
-  if (fields.length === 0) return y;
-
-  const perRow = 3;
-  const pad = 9;
-  const rowGap = 4;
-  const cellWidth = (contentWidth - pad * 2) / perRow;
-  const rows: Array<Array<[string, string]>> = [];
-  for (let i = 0; i < fields.length; i += perRow) rows.push(fields.slice(i, i + perRow));
-
-  doc.font("Helvetica").fontSize(8.5);
-  const rowHeights = rows.map((row) => 11 + Math.max(...row.map(([, value]) => doc.heightOfString(value, { width: cellWidth - 10 }))));
-  const boxHeight = pad * 2 + rowHeights.reduce((sum, h) => sum + h, 0) + (rows.length - 1) * rowGap;
-
-  doc.roundedRect(left, y, contentWidth, boxHeight, 6).fill(colors.soft);
-  let rowY = y + pad;
-  rows.forEach((row, rowIndex) => {
-    row.forEach(([label, value], col) => {
-      const x = left + pad + col * cellWidth;
-      doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text(label.toUpperCase(), x, rowY, { width: cellWidth - 10, characterSpacing: 0.3 });
-      doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(value, x, rowY + 10, { width: cellWidth - 10 });
-    });
-    rowY += rowHeights[rowIndex] + rowGap;
-  });
-  return y + boxHeight;
 }
 
 /* ---------- Items table ---------- */
@@ -510,37 +422,6 @@ function addFooters(doc: PDFKit.PDFDocument, data: InvoicePdfData) {
   }
 }
 
-function drawBrandMark(
-  doc: PDFKit.PDFDocument,
-  x: number,
-  y: number,
-  size: number,
-  name: string,
-  logo: InvoicePdfData["logo"]
-) {
-  if (logo && canDrawImage(logo.mimeType)) {
-    try {
-      doc.image(logo.data, x, y, { fit: [size, size], align: "center", valign: "center" });
-      return;
-    } catch {
-      // Fall back to initials if an uploaded image cannot be decoded by PDFKit.
-    }
-  }
-
-  const initials = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("") || "IM";
-  doc.roundedRect(x, y, size, size, 8).fill(colors.accentSoft);
-  doc.fillColor(colors.accent).font("Helvetica-Bold").fontSize(15).text(initials, x, y + size / 2 - 7, {
-    width: size,
-    align: "center",
-    lineBreak: false
-  });
-  doc.fillColor(colors.ink);
-}
 
 function drawSignatureImage(
   doc: PDFKit.PDFDocument,
@@ -568,27 +449,8 @@ function text(record: JsonRecord | null | undefined, key: string, fallback = "")
   return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
 }
 
-function ids(record: JsonRecord | null): string[] {
-  return [
-    text(record, "gstin") ? `GSTIN ${text(record, "gstin")}` : "",
-    text(record, "pan") ? `PAN ${text(record, "pan")}` : "",
-    text(record, "iec") ? `IEC ${text(record, "iec")}` : ""
-  ].filter(Boolean);
-}
 
-function formatAddressLines(record: JsonRecord | null): string[] {
-  return [
-    text(record, "addressLine1"),
-    text(record, "addressLine2"),
-    [text(record, "city"), text(record, "state"), text(record, "postcode")].filter(Boolean).join(", "),
-    text(record, "country"),
-    [text(record, "phone") ? `Ph. ${text(record, "phone")}` : "", text(record, "email")].filter(Boolean).join("   ")
-  ].filter(Boolean);
-}
 
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(date);
-}
 
 function money(value: string | number): string {
   return Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
