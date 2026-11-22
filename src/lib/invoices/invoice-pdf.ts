@@ -80,8 +80,8 @@ const frameBottom = 806;
 const tableHeaderHeight = 28;
 const colors = { ink: "#111111", muted: "#444444", rule: "#333333" };
 // Must add up to contentWidth (539pt).
-const cols = { marks: 50, item: 46, description: 223, qty: 54, rate: 58, gst: 40, amount: 68 };
-const colOrder = [cols.marks, cols.item, cols.description, cols.qty, cols.rate, cols.gst, cols.amount];
+const cols = { marks: 50, item: 46, description: 263, qty: 54, rate: 58, amount: 68 };
+const colOrder = [cols.marks, cols.item, cols.description, cols.qty, cols.rate, cols.amount];
 
 export function renderInvoicePdf(data: InvoicePdfData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -149,7 +149,6 @@ function drawTableHeader(doc: PDFKit.PDFDocument, y: number, currency: string) {
     ["Description of Goods", cols.description, "left"],
     ["Quantity", cols.qty, "center"],
     [`Rate\n(${money})`, cols.rate, "center"],
-    ["GST\n%", cols.gst, "center"],
     [`Amount\n(${money})`, cols.amount, "center"]
   ];
   let x = left;
@@ -198,8 +197,6 @@ function drawRow(doc: PDFKit.PDFDocument, line: InvoicePdfLine, index: number, y
   x += cols.qty;
   doc.fontSize(7.8).text(money(line.rate), x, y + 2, { width: cols.rate - 4, align: "center" });
   x += cols.rate;
-  doc.text(`${Number(line.gstRate || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}%`, x, y + 2, { width: cols.gst, align: "center" });
-  x += cols.gst;
   // Amount = taxable value of the line (qty x rate - line discount); taxes are added in the totals.
   doc.text(money(line.taxableAmount), x, y + 2, { width: cols.amount - 6, align: "right" });
 }
