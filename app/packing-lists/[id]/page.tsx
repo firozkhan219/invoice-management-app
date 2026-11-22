@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
+import { cartonRangeLabel, lineCartonCount } from "@/lib/packing-lists/calculation";
 import { getPackingList, getPackingListWorkspace, packingListIssueRequirements, shipmentNeedsPorts } from "@/lib/packing-lists/packing-list-service";
 
 export default async function PackingListDetailPage({
@@ -27,6 +28,7 @@ export default async function PackingListDetailPage({
   if (!packingList) notFound();
 
   const canEdit = packingList.status === "draft";
+  const nextCartonFrom = Math.max(0, ...packingList.lines.map((line) => line.cartonTo ?? line.cartonFrom ?? 0)) + 1;
   const isIssued = packingList.status === "issued";
   const isCancelled = packingList.status === "cancelled";
   const mayIssue = hasPermission(context.role, "invoices:issue");
@@ -181,42 +183,49 @@ export default async function PackingListDetailPage({
 
             <section className="document-lines">
               <div className="document-section-heading">
-                <h2>Package Details</h2>
+                <h2>Cartons</h2>
                 <span className="badge neutral">{packingList.lines.length} lines</span>
               </div>
               {packingList.lines.length === 0 ? (
-                <div className="empty-state">No packing rows yet. Add package details before issuing.</div>
+                <div className="empty-state">No cartons yet. Add carton rows before issuing.</div>
               ) : (
                 <div className="table-wrap">
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>#</th>
-                        <th>Package / Marks</th>
-                        <th>Item / HSN</th>
+                        <th>CTN no.</th>
+                        <th>Item no.</th>
                         <th>Description</th>
-                        <th>Qty</th>
-                        <th>Net KG</th>
-                        <th>Gross KG</th>
+                        <th>Pcs</th>
+                        <th>Net kg</th>
+                        <th>Gross kg</th>
                         <th>CBM</th>
                         {canEdit ? <th>Action</th> : null}
                       </tr>
                     </thead>
                     <tbody>
-                      {packingList.lines.map((line) => (
+                      {packingList.lines.map((line) => {
+                        const cartons = lineCartonCount(line);
+                        return (
                         <tr key={line.id}>
-                          <td>{line.sortOrder}</td>
                           <td>
-                            <strong>{line.packageNo || "-"}</strong>
-                            <p className="muted">{line.marksAndNumbers || "-"}</p>
+                            <strong>{cartonRangeLabel(line) || line.sortOrder}</strong>
+                            <p className="muted">{cartons} {cartons === 1 ? "CTN" : "CTNS"}{line.marksAndNumbers ? ` · ${line.marksAndNumbers}` : ""}</p>
                           </td>
                           <td>
                             {line.sku || "-"}
-                            <p className="muted">{line.hsnSac || "-"}</p>
+                            <p className="muted">{line.hsnSac ? `HSN ${line.hsnSac}` : ""}</p>
                           </td>
                           <td>
                             {line.description}
-                            <p className="muted">{line.lengthCm?.toString() || "-"} x {line.widthCm?.toString() || "-"} x {line.heightCm?.toString() || "-"} cm</p>
+                            <p className="muted">
+                              {[
+                                line.piecesPerCarton ? `${line.piecesPerCarton.toString()} ${line.unitCode || "pcs"}/CTN` : "",
+                                line.netWeightPerPieceKg ? `${line.netWeightPerPieceKg.toString()} kg net/pc` : "",
+                                line.grossWeightPerCartonKg ? `${line.grossWeightPerCartonKg.toString()} kg gross/CTN` : "",
+                                line.lengthCm && line.widthCm && line.heightCm ? `${line.lengthCm.toString()} × ${line.widthCm.toString()} × ${line.heightCm.toString()} cm` : ""
+                              ].filter(Boolean).join(" · ")}
+                            </p>
                           </td>
                           <td>{line.quantity.toString()} {line.unitCode || ""}</td>
                           <td>{line.netWeightKg.toString()}</td>
@@ -227,7 +236,13 @@ export default async function PackingListDetailPage({
                               <div className="line-actions">
                                 <details className="details compact">
                                   <summary>Edit</summary>
-                                  <PackingLineEditForm line={line} packingListId={packingList.id} version={packingList.version} />
+                                  <form className="form compact-form" action="/api/packing-lists/lines/update" method="post">
+                                    <input type="hidden" name="packingListId" value={packingList.id} />
+                                    <input type="hidden" name="lineId" value={line.id} />
+                                    <input type="hidden" name="expectedVersion" value={packingList.version} />
+                                    <CartonLineFields idPrefix={line.id} line={line} />
+                                    <button className="button" type="submit">Save line</button>
+                                  </form>
                                 </details>
                                 <form action="/api/packing-lists/lines/delete" method="post">
                                   <input type="hidden" name="packingListId" value={packingList.id} />
@@ -239,7 +254,8 @@ export default async function PackingListDetailPage({
                             </td>
                           ) : null}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -258,7 +274,7 @@ export default async function PackingListDetailPage({
 
             {canEdit ? (
               <details className="details top-space">
-                <summary><PackagePlus size={16} /> Add package line</summary>
+                <summary><PackagePlus size={16} /> Add cartons</summary>
                 <form className="form top-space" action="/api/packing-lists/lines" method="post">
                   <input type="hidden" name="packingListId" value={packingList.id} />
                   <input type="hidden" name="expectedVersion" value={packingList.version} />
@@ -279,29 +295,8 @@ export default async function PackingListDetailPage({
                       {workspace.items.map((item) => <option key={item.id} value={item.id}>{item.sku || item.name} - {item.name}</option>)}
                     </select>
                   </div>
-                  <div className="form-grid">
-                    <div className="field"><label htmlFor="packageNo">Package no</label><input id="packageNo" name="packageNo" /></div>
-                    <div className="field"><label htmlFor="marksAndNumbers">Marks</label><input id="marksAndNumbers" name="marksAndNumbers" /></div>
-                  </div>
-                  <div className="form-grid">
-                    <div className="field"><label htmlFor="sku">SKU</label><input id="sku" name="sku" /></div>
-                    <div className="field"><label htmlFor="hsnSac">HSN/SAC</label><input id="hsnSac" name="hsnSac" /></div>
-                  </div>
-                  <div className="field"><label htmlFor="description">Description</label><textarea id="description" name="description" required /></div>
-                  <div className="form-grid">
-                    <div className="field"><label htmlFor="quantity">Quantity</label><input id="quantity" name="quantity" type="number" step="0.0001" min="0" required /></div>
-                    <div className="field"><label htmlFor="unitCode">Unit</label><input id="unitCode" name="unitCode" /></div>
-                  </div>
-                  <div className="form-grid">
-                    <div className="field"><label htmlFor="netWeightKg">Net KG</label><input id="netWeightKg" name="netWeightKg" type="number" step="0.0001" min="0" defaultValue="0" /></div>
-                    <div className="field"><label htmlFor="grossWeightKg">Gross KG</label><input id="grossWeightKg" name="grossWeightKg" type="number" step="0.0001" min="0" defaultValue="0" /></div>
-                  </div>
-                  <div className="form-grid three">
-                    <div className="field"><label htmlFor="lengthCm">L cm</label><input id="lengthCm" name="lengthCm" type="number" step="0.0001" min="0" /></div>
-                    <div className="field"><label htmlFor="widthCm">W cm</label><input id="widthCm" name="widthCm" type="number" step="0.0001" min="0" /></div>
-                    <div className="field"><label htmlFor="heightCm">H cm</label><input id="heightCm" name="heightCm" type="number" step="0.0001" min="0" /></div>
-                  </div>
-                  <button className="button" type="submit">Add line</button>
+                  <CartonLineFields idPrefix="new" nextCartonFrom={nextCartonFrom} />
+                  <button className="button" type="submit">Add cartons</button>
                 </form>
               </details>
             ) : null}
@@ -312,46 +307,50 @@ export default async function PackingListDetailPage({
   );
 }
 
-function PackingLineEditForm({
-  line,
-  packingListId,
-  version
-}: {
-  line: NonNullable<Awaited<ReturnType<typeof getPackingList>>>["lines"][number];
-  packingListId: string;
-  version: number;
-}) {
-  const id = (name: string) => `${name}-${line.id}`;
+type PackingLine = NonNullable<Awaited<ReturnType<typeof getPackingList>>>["lines"][number];
+
+/**
+ * Carton-wise line inputs shared by "Add cartons" and each row's Edit form. Pcs, net and gross totals are
+ * worked out from pcs/CTN, net kg per piece and gross kg per carton; the totals box is only for rows
+ * that are not packed carton-wise.
+ */
+function CartonLineFields({ idPrefix, line, nextCartonFrom }: { idPrefix: string; line?: PackingLine; nextCartonFrom?: number }) {
+  const id = (name: string) => `${name}-${idPrefix}`;
+  const str = (value: { toString(): string } | null | undefined) => (value === null || value === undefined ? "" : value.toString());
+  const hasPerUnit = Boolean(line?.piecesPerCarton || line?.netWeightPerPieceKg || line?.grossWeightPerCartonKg);
   return (
-    <form className="form compact-form" action="/api/packing-lists/lines/update" method="post">
-      <input type="hidden" name="packingListId" value={packingListId} />
-      <input type="hidden" name="lineId" value={line.id} />
-      <input type="hidden" name="expectedVersion" value={version} />
-      <div className="form-grid">
-        <div className="field"><label htmlFor={id("sortOrder")}>Row #</label><input id={id("sortOrder")} name="sortOrder" type="number" min="1" defaultValue={line.sortOrder} /></div>
-        <div className="field"><label htmlFor={id("packageNo")}>Package no</label><input id={id("packageNo")} name="packageNo" defaultValue={line.packageNo || ""} /></div>
+    <>
+      {line ? <input type="hidden" name="sortOrder" value={line.sortOrder} /> : null}
+      <div className="form-grid three">
+        <div className="field"><label htmlFor={id("from")}>CTN no. from</label><input id={id("from")} name="cartonFrom" type="number" min="1" step="1" defaultValue={line ? str(line.cartonFrom) : String(nextCartonFrom ?? 1)} /></div>
+        <div className="field"><label htmlFor={id("to")}>CTN no. to</label><input id={id("to")} name="cartonTo" type="number" min="1" step="1" defaultValue={str(line?.cartonTo)} placeholder="same" /></div>
+        <div className="field"><label htmlFor={id("sku")}>Item no.</label><input id={id("sku")} name="sku" defaultValue={line?.sku || ""} /></div>
       </div>
-      <div className="field"><label htmlFor={id("marks")}>Marks</label><input id={id("marks")} name="marksAndNumbers" defaultValue={line.marksAndNumbers || ""} /></div>
-      <div className="form-grid">
-        <div className="field"><label htmlFor={id("sku")}>SKU</label><input id={id("sku")} name="sku" defaultValue={line.sku || ""} /></div>
-        <div className="field"><label htmlFor={id("hsn")}>HSN/SAC</label><input id={id("hsn")} name="hsnSac" defaultValue={line.hsnSac || ""} /></div>
-      </div>
-      <div className="field"><label htmlFor={id("description")}>Description</label><textarea id={id("description")} name="description" required defaultValue={line.description} /></div>
-      <div className="form-grid">
-        <div className="field"><label htmlFor={id("quantity")}>Quantity</label><input id={id("quantity")} name="quantity" type="number" step="0.0001" min="0" required defaultValue={line.quantity.toString()} /></div>
-        <div className="field"><label htmlFor={id("unit")}>Unit</label><input id={id("unit")} name="unitCode" defaultValue={line.unitCode || ""} /></div>
-      </div>
-      <div className="form-grid">
-        <div className="field"><label htmlFor={id("net")}>Net KG</label><input id={id("net")} name="netWeightKg" type="number" step="0.0001" min="0" defaultValue={line.netWeightKg.toString()} /></div>
-        <div className="field"><label htmlFor={id("gross")}>Gross KG</label><input id={id("gross")} name="grossWeightKg" type="number" step="0.0001" min="0" defaultValue={line.grossWeightKg.toString()} /></div>
+      <div className="field"><label htmlFor={id("description")}>Description of goods</label><textarea id={id("description")} name="description" required defaultValue={line?.description || ""} /></div>
+      <div className="form-grid three">
+        <div className="field"><label htmlFor={id("pcs")}>Pcs / CTN</label><input id={id("pcs")} name="piecesPerCarton" type="number" step="0.0001" min="0" defaultValue={str(line?.piecesPerCarton)} /></div>
+        <div className="field"><label htmlFor={id("netpc")}>Net kg / pc</label><input id={id("netpc")} name="netWeightPerPieceKg" type="number" step="0.000001" min="0" defaultValue={str(line?.netWeightPerPieceKg)} /></div>
+        <div className="field"><label htmlFor={id("grossctn")}>Gross kg / CTN</label><input id={id("grossctn")} name="grossWeightPerCartonKg" type="number" step="0.0001" min="0" defaultValue={str(line?.grossWeightPerCartonKg)} /></div>
       </div>
       <div className="form-grid three">
-        <div className="field"><label htmlFor={id("l")}>L cm</label><input id={id("l")} name="lengthCm" type="number" step="0.0001" min="0" defaultValue={line.lengthCm?.toString() || ""} /></div>
-        <div className="field"><label htmlFor={id("w")}>W cm</label><input id={id("w")} name="widthCm" type="number" step="0.0001" min="0" defaultValue={line.widthCm?.toString() || ""} /></div>
-        <div className="field"><label htmlFor={id("h")}>H cm</label><input id={id("h")} name="heightCm" type="number" step="0.0001" min="0" defaultValue={line.heightCm?.toString() || ""} /></div>
+        <div className="field"><label htmlFor={id("l")}>CTN L cm</label><input id={id("l")} name="lengthCm" type="number" step="0.0001" min="0" defaultValue={str(line?.lengthCm)} /></div>
+        <div className="field"><label htmlFor={id("w")}>CTN W cm</label><input id={id("w")} name="widthCm" type="number" step="0.0001" min="0" defaultValue={str(line?.widthCm)} /></div>
+        <div className="field"><label htmlFor={id("h")}>CTN H cm</label><input id={id("h")} name="heightCm" type="number" step="0.0001" min="0" defaultValue={str(line?.heightCm)} /></div>
       </div>
-      <button className="button" type="submit">Save line</button>
-    </form>
+      <div className="form-grid three">
+        <div className="field"><label htmlFor={id("unit")}>Unit</label><input id={id("unit")} name="unitCode" defaultValue={line?.unitCode || ""} placeholder="PCS" /></div>
+        <div className="field"><label htmlFor={id("hsn")}>HSN</label><input id={id("hsn")} name="hsnSac" defaultValue={line?.hsnSac || ""} /></div>
+        <div className="field"><label htmlFor={id("marks")}>Marks</label><input id={id("marks")} name="marksAndNumbers" defaultValue={line?.marksAndNumbers || ""} /></div>
+      </div>
+      <details className="details compact" open={Boolean(line && !hasPerUnit)}>
+        <summary>Totals instead (only for rows not packed carton-wise)</summary>
+        <div className="form-grid three">
+          <div className="field"><label htmlFor={id("qty")}>Total pcs</label><input id={id("qty")} name="quantity" type="number" step="0.0001" min="0" defaultValue={line && !line.piecesPerCarton ? str(line.quantity) : ""} /></div>
+          <div className="field"><label htmlFor={id("net")}>Total net kg</label><input id={id("net")} name="netWeightKg" type="number" step="0.0001" min="0" defaultValue={line && !line.netWeightPerPieceKg ? str(line.netWeightKg) : ""} /></div>
+          <div className="field"><label htmlFor={id("gross")}>Total gross kg</label><input id={id("gross")} name="grossWeightKg" type="number" step="0.0001" min="0" defaultValue={line && !line.grossWeightPerCartonKg ? str(line.grossWeightKg) : ""} /></div>
+        </div>
+      </details>
+    </>
   );
 }
 
@@ -425,11 +424,42 @@ function PackingListDocumentFields({
         <input id="portOfDischarge" name="portOfDischarge" defaultValue={packingList.portOfDischarge || ""} />
       </div>
       <div className="doc-field">
-        <label htmlFor="finalDestination">Country / Final Destination</label>
+        <label htmlFor="finalDestination">Port of Final Destination</label>
         <input id="finalDestination" name="finalDestination" defaultValue={packingList.finalDestination || ""} />
       </div>
+      <div className="doc-field">
+        <label htmlFor="buyerOrderNumber">Buyer&apos;s Order No. & Date</label>
+        <div className="inline-doc-fields">
+          <input id="buyerOrderNumber" name="buyerOrderNumber" defaultValue={packingList.buyerOrderNumber || ""} placeholder="Order no" />
+          <input id="buyerOrderDate" name="buyerOrderDate" type="date" defaultValue={packingList.buyerOrderDate?.toISOString().slice(0, 10) || ""} />
+        </div>
+      </div>
+      <div className="doc-field">
+        <label htmlFor="preCarriageBy">Pre-Carriage by</label>
+        <input id="preCarriageBy" name="preCarriageBy" defaultValue={packingList.preCarriageBy || ""} placeholder="Transport" />
+      </div>
+      <div className="doc-field">
+        <label htmlFor="placeOfReceipt">Place of Receipt by Pre-Carrier</label>
+        <input id="placeOfReceipt" name="placeOfReceipt" defaultValue={packingList.placeOfReceipt || ""} />
+      </div>
+      <div className="doc-field">
+        <label htmlFor="vesselFlightNo">Vessel / Flight No.</label>
+        <input id="vesselFlightNo" name="vesselFlightNo" defaultValue={packingList.vesselFlightNo || ""} />
+      </div>
+      <div className="doc-field">
+        <label htmlFor="countryOfOrigin">Country of Origin</label>
+        <input id="countryOfOrigin" name="countryOfOrigin" defaultValue={packingList.countryOfOrigin || "India"} />
+      </div>
+      <div className="doc-field">
+        <label htmlFor="countryOfFinalDestination">Country of Final Destination</label>
+        <input id="countryOfFinalDestination" name="countryOfFinalDestination" defaultValue={packingList.countryOfFinalDestination || ""} />
+      </div>
       <div className="doc-field span-3">
-        <label htmlFor="notes">Notes / Declaration</label>
+        <label htmlFor="termsOfDelivery">Terms of Delivery and Payment</label>
+        <textarea id="termsOfDelivery" name="termsOfDelivery" defaultValue={packingList.termsOfDelivery || ""} />
+      </div>
+      <div className="doc-field span-3">
+        <label htmlFor="notes">Declaration (blank = standard declaration)</label>
         <textarea id="notes" name="notes" defaultValue={packingList.notes || ""} />
       </div>
     </div>
@@ -459,8 +489,13 @@ function PackingListSnapshot({
       <div className="doc-field"><label>Container & Seal</label><p>{packingList.containerNumber || "-"} / {packingList.sealNumber || "-"}</p></div>
       <div className="doc-field"><label>Port of Loading</label><p>{packingList.portOfLoading || "-"}</p></div>
       <div className="doc-field"><label>Port of Discharge</label><p>{packingList.portOfDischarge || "-"}</p></div>
-      <div className="doc-field"><label>Country / Final Destination</label><p>{packingList.finalDestination || "-"}</p></div>
-      <div className="doc-field span-3"><label>Notes / Declaration</label><p>{packingList.notes || "-"}</p></div>
+      <div className="doc-field"><label>Port of Final Destination</label><p>{packingList.finalDestination || "-"}</p></div>
+      <div className="doc-field"><label>Buyer&apos;s Order No. & Date</label><p>{packingList.buyerOrderNumber || "-"}</p><p>{packingList.buyerOrderDate?.toISOString().slice(0, 10) || ""}</p></div>
+      <div className="doc-field"><label>Pre-Carriage by / Place of Receipt</label><p>{packingList.preCarriageBy || "-"} / {packingList.placeOfReceipt || "-"}</p></div>
+      <div className="doc-field"><label>Vessel / Flight No.</label><p>{packingList.vesselFlightNo || "-"}</p></div>
+      <div className="doc-field"><label>Country of Origin / Final Destination</label><p>{packingList.countryOfOrigin || "-"} / {packingList.countryOfFinalDestination || "-"}</p></div>
+      <div className="doc-field span-3"><label>Terms of Delivery and Payment</label><p>{packingList.termsOfDelivery || "-"}</p></div>
+      <div className="doc-field span-3"><label>Declaration</label><p>{packingList.notes || "Standard declaration"}</p></div>
     </div>
   );
 }

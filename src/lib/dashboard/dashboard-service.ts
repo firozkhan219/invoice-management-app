@@ -16,6 +16,7 @@ export async function getDashboardSummary(context: TenantContext) {
     where: {
       organisationId: tenant.organisationId,
       status: { in: ["issued", "partially_paid", "paid"] },
+      documentType: "tax_invoice",
       invoiceDate: { gte: monthStart, lt: nextMonth },
       currency: "INR"
     },
@@ -35,6 +36,7 @@ export async function getDashboardSummary(context: TenantContext) {
     where: {
       organisationId: tenant.organisationId,
       status: { in: ["issued", "partially_paid"] },
+      documentType: "tax_invoice",
       currency: "INR"
     },
     _sum: { balanceDue: true }

@@ -9,7 +9,7 @@ import { invoiceDraftSchema, invoiceItemSchema } from "@/lib/validation/invoices
  */
 export async function POST(request: Request) {
   return handleTenantForm(request, {
-    errorPath: "/invoices/new",
+    errorPath: (fields) => (fields.documentType === "proforma" ? "/invoices/new?type=proforma" : "/invoices/new"),
     handler: async ({ context, fields, formData }) => {
       const buyerId = typeof fields.buyerId === "string" ? fields.buyerId : "";
       if (!buyerId) throw new FormError("Choose a buyer.");
@@ -36,7 +36,9 @@ export async function POST(request: Request) {
       const billing = addresses.find((address) => address.isBillingDefault) ?? addresses[0];
       const shipping = addresses.find((address) => address.isShippingDefault) ?? billing;
 
+      const isProforma = fields.documentType === "proforma";
       const draftInput = parseForm(invoiceDraftSchema, {
+        documentType: isProforma ? "proforma" : "tax_invoice",
         companyId: fields.companyId ?? "",
         buyerId,
         billingAddressId: billing?.id ?? "",
@@ -73,6 +75,17 @@ export async function POST(request: Request) {
         return withFlash(`/invoices/${invoice.id}`, "error", `Draft saved, but a line needs attention: ${message}`);
       }
 
+      if (fields.intent === "issue" && isProforma) {
+        // Proformas take their own PI number, so no tax invoice series is needed.
+        try {
+          await issueInvoice(context, { invoiceId: invoice.id, seriesId: undefined, expectedVersion: invoice.version });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "The proforma could not be issued.";
+          return withFlash(`/invoices/${invoice.id}`, "error", `Draft saved but not issued: ${message}`);
+        }
+        return withFlash(`/invoices/${invoice.id}`, "notice", "Proforma issued. Use the PDF button to download it.");
+      }
+
       if (fields.intent === "issue") {
         const series = await prisma.invoiceNumberSeries.findFirst({
           where: { organisationId: context.organisationId, isActive: true },
@@ -88,7 +101,7 @@ export async function POST(request: Request) {
         return withFlash(`/invoices/${invoice.id}`, "notice", "Invoice issued. Use Invoice PDF to download it.");
       }
 
-      return withFlash(`/invoices/${invoice.id}`, "notice", "Draft saved.");
+      return withFlash(`/invoices/${invoice.id}`, "notice", isProforma ? "Proforma draft saved." : "Draft saved.");
     }
   });
 }

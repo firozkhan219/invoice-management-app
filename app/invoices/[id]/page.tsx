@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AlertTriangle, ArrowLeft, Ban, CheckCircle2, Copy, CreditCard, Eye, FileClock, FileText, PackageCheck, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRightLeft, Ban, CheckCircle2, Copy, CreditCard, Eye, FileClock, FileText, PackageCheck, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { daysOverdue, getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
@@ -36,14 +36,17 @@ export default async function InvoiceEditorPage({
   const issueOptions = isDraft && mayIssue ? await getInvoiceIssueOptions(context) : null;
   const seriesList = issueOptions?.series ?? [];
   const canOpenPdf = ["issued", "partially_paid", "paid"].includes(invoice.status);
-  const canRecordPayment = mayManagePayments && ["issued", "partially_paid"].includes(invoice.status) && invoice.balanceDue.gt(0);
-  const canCreateCreditNote = mayCreate && ["issued", "partially_paid", "paid"].includes(invoice.status);
+  const isProforma = invoice.documentType === "proforma";
+  const activeConversion = invoice.convertedInvoices.find((converted) => converted.status !== "cancelled");
+  const canConvert = isProforma && mayCreate && invoice.status === "issued" && !activeConversion;
+  const canRecordPayment = !isProforma && mayManagePayments && ["issued", "partially_paid"].includes(invoice.status) && invoice.balanceDue.gt(0);
+  const canCreateCreditNote = !isProforma && mayCreate && ["issued", "partially_paid", "paid"].includes(invoice.status);
   const canCreatePackingList = canCreateCreditNote;
   const issuedPackingLists = invoice.packingLists.filter((packingList) => packingList.status === "issued");
   const draftPackingLists = invoice.packingLists.filter((packingList) => packingList.status === "draft");
   const issuedCreditNotes = invoice.creditNotes.filter((creditNote) => creditNote.status === "issued");
   const canCancel = mayCancel && invoice.status === "issued" && invoice.paidTotal.lte(0) && invoice.creditedTotal.lte(0);
-  const canIssue = Boolean(mayIssue && invoice.companyId && invoice.buyerId && invoice.items.length > 0 && invoice.grandTotal.gt(0) && seriesList.length > 0);
+  const canIssue = Boolean(mayIssue && invoice.companyId && invoice.buyerId && invoice.items.length > 0 && invoice.grandTotal.gt(0) && (isProforma || seriesList.length > 0));
   const paymentHref = `/payments?invoiceId=${invoice.id}`;
   const canReopen = mayCreate && mayIssue && invoice.status === "issued" && invoice.paidTotal.lte(0) && invoice.creditedTotal.lte(0) && issuedCreditNotes.length === 0;
   const editOpen = query?.edit === "1";
@@ -53,7 +56,7 @@ export default async function InvoiceEditorPage({
     hasBuyer: Boolean(invoice.buyerId),
     hasItems: invoice.items.length > 0,
     hasPositiveTotal: invoice.grandTotal.gt(0),
-    hasSeries: Boolean(invoice.invoiceNumber) || seriesList.length > 0,
+    hasSeries: isProforma || Boolean(invoice.invoiceNumber) || seriesList.length > 0,
     // Shipping fields only matter for export invoices (foreign currency or zero-rated export).
     isExport: invoice.currency !== "INR" || invoice.taxMode === "zero_rated_export",
     hasExportFields: Boolean(invoice.portOfLoading && invoice.portOfDischarge && invoice.finalDestination)
@@ -66,7 +69,7 @@ export default async function InvoiceEditorPage({
       itemCount: invoice.items.length,
       grandTotal: invoice.grandTotal
     }),
-    mayIssue && seriesList.length === 0 ? "create an invoice number series" : null
+    mayIssue && !isProforma && seriesList.length === 0 ? "create an invoice number series" : null
   ].filter((requirement): requirement is string => Boolean(requirement));
 
   return (
@@ -75,7 +78,8 @@ export default async function InvoiceEditorPage({
         <div className="invoice-head-title">
           <Link className="back-link" href="/invoices"><ArrowLeft size={15} /> Invoices</Link>
           <h1>
-            {invoice.invoiceNumber || "Draft invoice"}
+            {invoice.invoiceNumber || (isProforma ? "Draft proforma" : "Draft invoice")}
+            {isProforma ? <span className="badge neutral doc-type">Proforma</span> : null}
             <span className={`status-badge ${invoice.status}`}>{statusLabel}</span>
             {daysOverdue(invoice) > 0 ? <span className="status-badge overdue">{daysOverdue(invoice)} days overdue</span> : null}
           </h1>
@@ -108,7 +112,13 @@ export default async function InvoiceEditorPage({
           {canRecordPayment ? (
             <Link className="button subtle" href={paymentHref}><CreditCard size={16} /> Record payment</Link>
           ) : null}
-          {isDraft && mayIssue && (seriesList.length > 0 || invoice.invoiceNumber) ? (
+          {canConvert ? (
+            <form action="/api/invoices/convert" method="post">
+              <input type="hidden" name="invoiceId" value={invoice.id} />
+              <button className="button" type="submit" title="Create a tax invoice draft from this proforma"><ArrowRightLeft size={16} /> Convert to tax invoice</button>
+            </form>
+          ) : null}
+          {isDraft && mayIssue && (isProforma || seriesList.length > 0 || invoice.invoiceNumber) ? (
             <a className="button" href="#issue-invoice"><Send size={16} /> {invoice.invoiceNumber ? "Re-issue" : "Issue"}</a>
           ) : null}
         </div>
@@ -124,6 +134,20 @@ export default async function InvoiceEditorPage({
             </span>
           ))}
         </div>
+      ) : null}
+      {isProforma && activeConversion ? (
+        <p className="notice">
+          Converted to tax invoice{" "}
+          <Link href={`/invoices/${activeConversion.id}`}>{activeConversion.invoiceNumber || "draft"}</Link>.
+        </p>
+      ) : null}
+      {isProforma && invoice.status === "issued" && !activeConversion ? (
+        <p className="notice">This proforma is not a sale yet. When the buyer confirms, use Convert to tax invoice.</p>
+      ) : null}
+      {invoice.sourceProforma ? (
+        <p className="notice">
+          Created from proforma <Link href={`/invoices/${invoice.sourceProforma.id}`}>{invoice.sourceProforma.invoiceNumber || "draft"}</Link>.
+        </p>
       ) : null}
       {isDraft && invoice.invoiceNumber ? (
         <p className="notice">This invoice is open for editing. It keeps number {invoice.invoiceNumber}; issue it again to update the PDF.</p>
@@ -453,14 +477,27 @@ export default async function InvoiceEditorPage({
               <div className="section-title">
                 <div>
                   <p className="muted">Finalise</p>
-                  <h2>{invoice.invoiceNumber ? "Re-issue invoice" : "Issue invoice"}</h2>
+                  <h2>{isProforma ? (invoice.invoiceNumber ? "Re-issue proforma" : "Issue proforma") : invoice.invoiceNumber ? "Re-issue invoice" : "Issue invoice"}</h2>
                 </div>
                 <Send size={20} />
               </div>
               {issueRequirements.length > 0 ? (
                 <p className="notice error">Before issuing: {issueRequirements.join(", ")}.</p>
               ) : null}
-              {seriesList.length === 0 && !invoice.invoiceNumber ? (
+              {isProforma ? (
+                <form className="form" action="/api/invoices/issue" method="post">
+                  <input type="hidden" name="invoiceId" value={invoice.id} />
+                  <input type="hidden" name="expectedVersion" value={invoice.version} />
+                  <div className="field">
+                    <label htmlFor="invoiceNumber">Proforma number</label>
+                    <input id="invoiceNumber" name="invoiceNumber" defaultValue={invoice.invoiceNumber || ""} placeholder="Leave blank for the next PI number" maxLength={60} />
+                  </div>
+                  <button className="button" type="submit" disabled={!canIssue}>
+                    <Send size={18} />
+                    {invoice.invoiceNumber ? "Re-issue proforma" : "Issue proforma"}
+                  </button>
+                </form>
+              ) : seriesList.length === 0 && !invoice.invoiceNumber ? (
                 <p className="muted">Create an invoice number series in <Link href="/settings">Settings</Link> first.</p>
               ) : (
                 <form className="form" action="/api/invoices/issue" method="post">

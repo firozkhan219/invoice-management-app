@@ -14,13 +14,15 @@ export async function POST(request: Request) {
       const descriptions = column("lineDescription");
       const itemIds = column("lineItemId");
       const invoiceItemIds = column("lineInvoiceItemId");
-      const boxes = column("lineBox");
+      const cartonFroms = column("lineCtnFrom");
+      const cartonTos = column("lineCtnTo");
       const skus = column("lineSku");
+      const marks = column("lineMarks");
       const hsns = column("lineHsn");
       const units = column("lineUnit");
-      const quantities = column("lineQuantity");
-      const nets = column("lineNet");
-      const grosses = column("lineGross");
+      const piecesPerCarton = column("linePcsPerCtn");
+      const netPerPiece = column("lineNetPerPc");
+      const grossPerCarton = column("lineGrossPerCtn");
       const lengths = column("lineLength");
       const widths = column("lineWidth");
       const heights = column("lineHeight");
@@ -33,23 +35,25 @@ export async function POST(request: Request) {
             return parseForm(quickPackingLineSchema, {
               itemId: itemIds[index] ?? "",
               invoiceItemId: invoiceItemIds[index] ?? "",
-              packageNo: boxes[index] ?? "",
+              cartonFrom: cartonFroms[index] ?? "",
+              cartonTo: cartonTos[index] ?? "",
               sku: skus[index] ?? "",
+              marksAndNumbers: marks[index] ?? "",
               description,
               hsnSac: hsns[index] ?? "",
-              quantity: quantities[index] || "0",
               unitCode: units[index] ?? "",
-              netWeightKg: nets[index] || "0",
-              grossWeightKg: grosses[index] || "0",
+              piecesPerCarton: piecesPerCarton[index] ?? "",
+              netWeightPerPieceKg: netPerPiece[index] ?? "",
+              grossWeightPerCartonKg: grossPerCarton[index] ?? "",
               lengthCm: lengths[index] ?? "",
               widthCm: widths[index] ?? "",
               heightCm: heights[index] ?? ""
             });
           } catch (error) {
-            throw new FormError(`Line ${position + 1}: ${error instanceof Error ? error.message : "check the numbers."}`);
+            throw new FormError(`Row ${position + 1}: ${error instanceof Error ? error.message : "check the numbers."}`);
           }
         });
-      if (lines.length === 0) throw new FormError("Add at least one product or box line.");
+      if (lines.length === 0) throw new FormError("Add at least one carton row.");
 
       const draft = parseForm(packingListDraftSchema, {
         invoiceId: fields.invoiceId ?? "",
@@ -63,6 +67,14 @@ export async function POST(request: Request) {
         portOfLoading: fields.portOfLoading ?? "",
         portOfDischarge: fields.portOfDischarge ?? "",
         finalDestination: fields.finalDestination ?? "",
+        buyerOrderNumber: fields.buyerOrderNumber ?? "",
+        buyerOrderDate: fields.buyerOrderDate ?? "",
+        preCarriageBy: fields.preCarriageBy ?? "",
+        placeOfReceipt: fields.placeOfReceipt ?? "",
+        vesselFlightNo: fields.vesselFlightNo ?? "",
+        termsOfDelivery: fields.termsOfDelivery ?? "",
+        countryOfOrigin: fields.countryOfOrigin ?? "",
+        countryOfFinalDestination: fields.countryOfFinalDestination ?? "",
         notes: fields.notes ?? ""
       });
       if (!draft.invoiceId && !draft.buyerId) throw new FormError("Choose a buyer or an invoice to copy from.");

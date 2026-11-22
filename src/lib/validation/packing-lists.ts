@@ -5,6 +5,8 @@ const optionalText = (max: number) =>
 
 const optionalUuid = z.string().uuid().optional().or(z.literal("")).transform((value) => value || undefined);
 const optionalNumber = z.preprocess((value) => (value === "" || value === null ? undefined : value), z.coerce.number().min(0).optional());
+const optionalInt = z.preprocess((value) => (value === "" || value === null ? undefined : value), z.coerce.number().int().min(1).max(99999).optional());
+const optionalDate = z.preprocess((value) => (value === "" || value === null ? undefined : value), z.coerce.date().optional());
 
 export const packingListDraftSchema = z.object({
   invoiceId: optionalUuid,
@@ -19,6 +21,14 @@ export const packingListDraftSchema = z.object({
   portOfLoading: optionalText(120),
   portOfDischarge: optionalText(120),
   finalDestination: optionalText(120),
+  buyerOrderNumber: optionalText(120),
+  buyerOrderDate: optionalDate,
+  preCarriageBy: optionalText(120),
+  placeOfReceipt: optionalText(120),
+  vesselFlightNo: optionalText(120),
+  termsOfDelivery: optionalText(2000),
+  countryOfOrigin: optionalText(80),
+  countryOfFinalDestination: optionalText(80),
   notes: optionalText(5000),
   version: z.coerce.number().int().min(1).optional()
 });
@@ -29,14 +39,21 @@ export const packingListLineSchema = z.object({
   invoiceItemId: optionalUuid,
   sortOrder: z.coerce.number().int().min(1).default(1),
   packageNo: optionalText(80),
+  // Carton-wise lines: "2 to 8" cartons, 10 pcs each, 0.640 kg net per piece, 9 kg gross per carton.
+  cartonFrom: optionalInt,
+  cartonTo: optionalInt,
+  piecesPerCarton: optionalNumber,
+  netWeightPerPieceKg: optionalNumber,
+  grossWeightPerCartonKg: optionalNumber,
   marksAndNumbers: optionalText(160),
   sku: optionalText(80),
   description: z.string().trim().min(1).max(5000),
   hsnSac: optionalText(20),
-  quantity: z.coerce.number().min(0),
+  // Totals may be left blank when pcs/carton and weights per piece/carton are given; they are worked out.
+  quantity: z.preprocess((value) => (value === "" || value === null || value === undefined ? 0 : value), z.coerce.number().min(0)),
   unitCode: optionalText(20),
-  netWeightKg: z.coerce.number().min(0).default(0),
-  grossWeightKg: z.coerce.number().min(0).default(0),
+  netWeightKg: z.preprocess((value) => (value === "" || value === null || value === undefined ? 0 : value), z.coerce.number().min(0)),
+  grossWeightKg: z.preprocess((value) => (value === "" || value === null || value === undefined ? 0 : value), z.coerce.number().min(0)),
   lengthCm: optionalNumber,
   widthCm: optionalNumber,
   heightCm: optionalNumber,

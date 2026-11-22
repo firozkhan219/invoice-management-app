@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Download, FilePlus2, Search, Send, Trash2 } from "lucide-react";
+import { Download, FilePlus2, FileText, Search, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { draftIssueRequirements, draftLifecycleLabel } from "@/lib/invoices/lifecycle";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -13,7 +13,7 @@ import { formatMoney } from "@/lib/format";
 export default async function InvoicesPage({
   searchParams
 }: {
-  searchParams?: Promise<{ q?: string; status?: string; currency?: string; dateFrom?: string; dateTo?: string }>;
+  searchParams?: Promise<{ q?: string; status?: string; type?: string; currency?: string; dateFrom?: string; dateTo?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -44,6 +44,12 @@ export default async function InvoicesPage({
             Export CSV
           </a>
           {mayCreate ? (
+            <Link className="button subtle" href="/invoices/new?type=proforma">
+              <FileText size={18} />
+              New proforma
+            </Link>
+          ) : null}
+          {mayCreate ? (
             <Link className="button" href="/invoices/new">
               <FilePlus2 size={18} />
               New draft
@@ -65,6 +71,14 @@ export default async function InvoicesPage({
                 <option value="overdue">Overdue</option>
                 <option value="paid">Paid</option>
                 <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="type">Document</label>
+              <select id="type" name="type" defaultValue={filters?.type || ""}>
+                <option value="">All</option>
+                <option value="tax_invoice">Tax invoices</option>
+                <option value="proforma">Proforma</option>
               </select>
             </div>
             <div className="field filter-currency"><label htmlFor="currency">Currency</label><input id="currency" name="currency" maxLength={3} placeholder="Any" defaultValue={filters?.currency || ""} /></div>
@@ -109,15 +123,19 @@ export default async function InvoicesPage({
                     itemCount: invoice.items.length,
                     grandTotal: invoice.grandTotal
                   });
+                  const isProforma = invoice.documentType === "proforma";
                   const canIssue = invoice.status === "draft"
                     && issueRequirements.length === 0
-                    && issueOptions.series.length > 0;
+                    && (isProforma || issueOptions.series.length > 0);
                   const canDeleteEmptyDraft = mayCreate && invoice.status === "draft" && invoice.items.length === 0;
 
                   return (
                     <tr key={invoice.id}>
                       <td><Link href={`/invoices/${invoice.id}`}>{invoice.invoiceDate.toISOString().slice(0, 10)}</Link></td>
-                      <td>{invoice.invoiceNumber || "-"}</td>
+                      <td>
+                        {invoice.invoiceNumber || "-"}
+                        {isProforma ? <span className="badge neutral doc-type">Proforma</span> : null}
+                      </td>
                       <td>{invoice.buyer?.displayName || "-"}</td>
                       <td>
                         <span className={`status-badge ${invoice.status}`}>{invoice.status.replace("_", " ")}</span>
@@ -132,13 +150,15 @@ export default async function InvoicesPage({
                           <form className="inline-action" action="/api/invoices/issue" method="post">
                             <input type="hidden" name="invoiceId" value={invoice.id} />
                             <input type="hidden" name="expectedVersion" value={invoice.version} />
-                            <select aria-label="Number series" name="seriesId" defaultValue={issueOptions.series[0]?.id} required>
-                              {issueOptions.series.map((series) => (
-                                <option key={series.id} value={series.id}>
-                                  {previewInvoiceNumber(series, invoice.invoiceDate, issueOptions.organisation.financialYearStart)}
-                                </option>
-                              ))}
-                            </select>
+                            {isProforma ? null : (
+                              <select aria-label="Number series" name="seriesId" defaultValue={issueOptions.series[0]?.id} required>
+                                {issueOptions.series.map((series) => (
+                                  <option key={series.id} value={series.id}>
+                                    {previewInvoiceNumber(series, invoice.invoiceDate, issueOptions.organisation.financialYearStart)}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                             <button className="button" type="submit">
                               <Send size={16} />
                               Issue

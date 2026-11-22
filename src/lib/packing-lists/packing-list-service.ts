@@ -2,7 +2,7 @@ import { Prisma, type PackingListStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { assertPermission } from "@/lib/permissions/roles";
 import { requireTenantContext, type TenantContext } from "@/lib/repositories/tenant-context";
-import { calculatePackingTotals, lineVolumeCbm } from "@/lib/packing-lists/calculation";
+import { calculatePackingTotals, lineVolumeCbm, resolveCartonLine } from "@/lib/packing-lists/calculation";
 import type {
   PackingListDraftInput,
   PackingListIssueInput,
@@ -69,10 +69,10 @@ export async function getPackingList(context: TenantContext, packingListId: stri
   return prisma.packingList.findFirst({
     where: { id: packingListId, organisationId: tenant.organisationId },
     include: {
-      invoice: { include: { items: { include: { item: true }, orderBy: { sortOrder: "asc" } } } },
+      invoice: { include: { shippingAddress: true, items: { include: { item: true }, orderBy: { sortOrder: "asc" } } } },
       company: { include: { logoAsset: true, signatureAsset: true } },
-      buyer: true,
-      consigneeBuyer: true,
+      buyer: { include: { addresses: { where: { isActive: true }, orderBy: { createdAt: "asc" } } } },
+      consigneeBuyer: { include: { addresses: { where: { isActive: true }, orderBy: { createdAt: "asc" } } } },
       lines: { include: { item: true, invoiceItem: true }, orderBy: { sortOrder: "asc" } }
     }
   });
@@ -84,7 +84,7 @@ export async function getPackingListWorkspace(context: TenantContext) {
 
   const [invoices, companies, buyers, items] = await Promise.all([
     prisma.invoice.findMany({
-      where: { organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] } },
+      where: { organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] }, documentType: "tax_invoice" },
       include: { buyer: true, company: true },
       orderBy: [{ invoiceDate: "desc" }, { createdAt: "desc" }],
       take: 50
@@ -109,7 +109,7 @@ export async function createPackingListDraft(context: TenantContext, input: Pack
         where: {
           id: input.invoiceId,
           organisationId: tenant.organisationId,
-          status: { in: ["issued", "partially_paid", "paid"] }
+          status: { in: ["issued", "partially_paid", "paid"] }, documentType: "tax_invoice"
         },
         include: { items: { include: { item: true }, orderBy: { sortOrder: "asc" } } }
       });
@@ -134,6 +134,14 @@ export async function createPackingListDraft(context: TenantContext, input: Pack
         portOfLoading: input.portOfLoading || invoice?.portOfLoading,
         portOfDischarge: input.portOfDischarge || invoice?.portOfDischarge,
         finalDestination: input.finalDestination || invoice?.finalDestination,
+        ...headerWriteData(input),
+        buyerOrderNumber: input.buyerOrderNumber || invoice?.buyerOrderNumber,
+        buyerOrderDate: input.buyerOrderDate || invoice?.buyerOrderDate,
+        preCarriageBy: input.preCarriageBy || invoice?.preCarriageBy,
+        placeOfReceipt: input.placeOfReceipt || invoice?.placeOfReceipt,
+        vesselFlightNo: input.vesselFlightNo || invoice?.vesselFlightNo,
+        termsOfDelivery: input.termsOfDelivery || invoice?.termsOfDelivery,
+        countryOfOrigin: input.countryOfOrigin || "India",
         notes: input.notes,
         createdById: tenant.userId
       }
@@ -188,7 +196,7 @@ export async function getQuickPackingData(context: TenantContext) {
 
   const [invoices, companies, buyers, items] = await Promise.all([
     prisma.invoice.findMany({
-      where: { organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] } },
+      where: { organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] }, documentType: "tax_invoice" },
       include: {
         buyer: { select: { displayName: true } },
         items: { include: { item: { select: { weightKg: true } } }, orderBy: { sortOrder: "asc" } }
@@ -225,7 +233,7 @@ export async function createQuickPackingList(
     let invoice: { id: string; companyId: string | null; buyerId: string | null; consigneeBuyerId: string | null } | null = null;
     if (input.invoiceId) {
       invoice = await tx.invoice.findFirst({
-        where: { id: input.invoiceId, organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] } },
+        where: { id: input.invoiceId, organisationId: tenant.organisationId, status: { in: ["issued", "partially_paid", "paid"] }, documentType: "tax_invoice" },
         select: { id: true, companyId: true, buyerId: true, consigneeBuyerId: true }
       });
       if (!invoice) throw new Error("Issued invoice not found.");
@@ -262,6 +270,8 @@ export async function createQuickPackingList(
         portOfLoading: input.portOfLoading,
         portOfDischarge: input.portOfDischarge,
         finalDestination: input.finalDestination,
+        ...headerWriteData(input),
+        countryOfOrigin: input.countryOfOrigin || "India",
         notes: input.notes,
         createdById: tenant.userId
       }
@@ -274,19 +284,7 @@ export async function createQuickPackingList(
         itemId: line.itemId,
         invoiceItemId: line.invoiceItemId,
         sortOrder: index + 1,
-        packageNo: line.packageNo,
-        marksAndNumbers: line.marksAndNumbers,
-        sku: line.sku,
-        description: line.description,
-        hsnSac: line.hsnSac,
-        quantity: new Prisma.Decimal(line.quantity),
-        unitCode: line.unitCode,
-        netWeightKg: new Prisma.Decimal(line.netWeightKg),
-        grossWeightKg: new Prisma.Decimal(line.grossWeightKg),
-        lengthCm: line.lengthCm === undefined ? undefined : new Prisma.Decimal(line.lengthCm),
-        widthCm: line.widthCm === undefined ? undefined : new Prisma.Decimal(line.widthCm),
-        heightCm: line.heightCm === undefined ? undefined : new Prisma.Decimal(line.heightCm),
-        volumeCbm: lineVolumeCbm(line)
+        ...lineWriteData(line)
       }))
     });
 
@@ -319,6 +317,14 @@ export const CLEARABLE_PACKING_FIELDS = [
   "portOfLoading",
   "portOfDischarge",
   "finalDestination",
+  "buyerOrderNumber",
+  "buyerOrderDate",
+  "preCarriageBy",
+  "placeOfReceipt",
+  "vesselFlightNo",
+  "termsOfDelivery",
+  "countryOfOrigin",
+  "countryOfFinalDestination",
   "notes"
 ] as const;
 
@@ -357,6 +363,7 @@ export async function updatePackingListDraft(
         portOfLoading: input.portOfLoading,
         portOfDischarge: input.portOfDischarge,
         finalDestination: input.finalDestination,
+        ...headerWriteData(input),
         notes: input.notes,
         ...cleared,
         version: { increment: 1 },
@@ -399,19 +406,7 @@ export async function addPackingListLine(context: TenantContext, input: PackingL
         itemId: input.itemId,
         invoiceItemId: input.invoiceItemId,
         sortOrder: input.sortOrder,
-        packageNo: input.packageNo,
-        marksAndNumbers: input.marksAndNumbers,
-        sku: input.sku,
-        description: input.description,
-        hsnSac: input.hsnSac,
-        quantity: new Prisma.Decimal(input.quantity),
-        unitCode: input.unitCode,
-        netWeightKg: new Prisma.Decimal(input.netWeightKg),
-        grossWeightKg: new Prisma.Decimal(input.grossWeightKg),
-        lengthCm: input.lengthCm === undefined ? undefined : new Prisma.Decimal(input.lengthCm),
-        widthCm: input.widthCm === undefined ? undefined : new Prisma.Decimal(input.widthCm),
-        heightCm: input.heightCm === undefined ? undefined : new Prisma.Decimal(input.heightCm),
-        volumeCbm: lineVolumeCbm(input)
+        ...lineWriteData(input)
       }
     });
 
@@ -486,19 +481,7 @@ export async function updatePackingListLine(context: TenantContext, input: Packi
       where: { id: line.id },
       data: {
         sortOrder: input.sortOrder,
-        packageNo: input.packageNo ?? null,
-        marksAndNumbers: input.marksAndNumbers ?? null,
-        sku: input.sku ?? null,
-        description: input.description,
-        hsnSac: input.hsnSac ?? null,
-        quantity: new Prisma.Decimal(input.quantity),
-        unitCode: input.unitCode ?? null,
-        netWeightKg: new Prisma.Decimal(input.netWeightKg),
-        grossWeightKg: new Prisma.Decimal(input.grossWeightKg),
-        lengthCm: input.lengthCm === undefined ? null : new Prisma.Decimal(input.lengthCm),
-        widthCm: input.widthCm === undefined ? null : new Prisma.Decimal(input.widthCm),
-        heightCm: input.heightCm === undefined ? null : new Prisma.Decimal(input.heightCm),
-        volumeCbm: lineVolumeCbm(input)
+        ...lineWriteData(input)
       }
     });
 
@@ -712,6 +695,14 @@ export async function generatePackingListPdf(context: TenantContext, packingList
     invoiceNumber: packingList.invoice?.invoiceNumber,
     invoiceDate: packingList.invoice?.invoiceDate,
     exportReference: packingList.exportReference,
+    buyerOrderNumber: packingList.buyerOrderNumber,
+    buyerOrderDate: packingList.buyerOrderDate,
+    preCarriageBy: packingList.preCarriageBy,
+    placeOfReceipt: packingList.placeOfReceipt,
+    vesselFlightNo: packingList.vesselFlightNo,
+    termsOfDelivery: packingList.termsOfDelivery,
+    countryOfOrigin: packingList.countryOfOrigin,
+    countryOfFinalDestination: packingList.countryOfFinalDestination,
     containerNumber: packingList.containerNumber,
     sealNumber: packingList.sealNumber,
     shipmentMode: packingList.shipmentMode,
@@ -720,12 +711,17 @@ export async function generatePackingListPdf(context: TenantContext, packingList
     finalDestination: packingList.finalDestination,
     company: asRecord(packingList.company),
     buyer: asRecord(packingList.buyer),
-    consignee: asRecord(packingList.consigneeBuyer || packingList.buyer),
+    consignee: consigneeWithAddress(packingList),
     logo,
     signature,
     lines: packingList.lines.map((line) => ({
       sortOrder: line.sortOrder,
       packageNo: line.packageNo,
+      cartonFrom: line.cartonFrom,
+      cartonTo: line.cartonTo,
+      piecesPerCarton: line.piecesPerCarton?.toString(),
+      netWeightPerPieceKg: line.netWeightPerPieceKg?.toString(),
+      grossWeightPerCartonKg: line.grossWeightPerCartonKg?.toString(),
       marksAndNumbers: line.marksAndNumbers,
       sku: line.sku,
       description: line.description,
@@ -797,6 +793,52 @@ export function shipmentNeedsPorts(shipmentMode: string | null | undefined) {
   return !/(road|truck|lorry|courier|hand|rail|train|tempo|local)/.test(mode);
 }
 
+type LineFields = Omit<QuickPackingLineInput, "itemId" | "invoiceItemId">;
+
+/** Column values for one packing line, with quantity and weights worked out from carton-wise inputs. */
+function lineWriteData(line: LineFields) {
+  if (line.cartonFrom && line.cartonTo && line.cartonTo < line.cartonFrom) {
+    throw new Error(`Carton range ${line.cartonFrom} to ${line.cartonTo} runs backwards.`);
+  }
+  if (line.cartonTo && !line.cartonFrom) throw new Error("Enter the first carton number as well as the last.");
+  const resolved = resolveCartonLine(line);
+  const dec = (value: number | undefined) => (value === undefined ? null : new Prisma.Decimal(value));
+  return {
+    packageNo: line.packageNo ?? null,
+    cartonFrom: line.cartonFrom ?? null,
+    cartonTo: line.cartonFrom ? (line.cartonTo ?? line.cartonFrom) : null,
+    piecesPerCarton: dec(line.piecesPerCarton),
+    netWeightPerPieceKg: dec(line.netWeightPerPieceKg),
+    grossWeightPerCartonKg: dec(line.grossWeightPerCartonKg),
+    marksAndNumbers: line.marksAndNumbers ?? null,
+    sku: line.sku ?? null,
+    description: line.description,
+    hsnSac: line.hsnSac ?? null,
+    quantity: resolved.quantity,
+    unitCode: line.unitCode ?? null,
+    netWeightKg: resolved.netWeightKg,
+    grossWeightKg: resolved.grossWeightKg,
+    lengthCm: dec(line.lengthCm),
+    widthCm: dec(line.widthCm),
+    heightCm: dec(line.heightCm),
+    volumeCbm: lineVolumeCbm({ ...line, quantity: resolved.quantity, netWeightKg: resolved.netWeightKg, grossWeightKg: resolved.grossWeightKg })
+  };
+}
+
+/** Header fields shared by create, quick create and update. */
+function headerWriteData(input: PackingListDraftInput) {
+  return {
+    buyerOrderNumber: input.buyerOrderNumber,
+    buyerOrderDate: input.buyerOrderDate,
+    preCarriageBy: input.preCarriageBy,
+    placeOfReceipt: input.placeOfReceipt,
+    vesselFlightNo: input.vesselFlightNo,
+    termsOfDelivery: input.termsOfDelivery,
+    countryOfOrigin: input.countryOfOrigin,
+    countryOfFinalDestination: input.countryOfFinalDestination
+  };
+}
+
 async function assertLineRefs(
   tx: Prisma.TransactionClient,
   organisationId: string,
@@ -860,6 +902,45 @@ async function updatePackingTotals(
       updatedById: userId
     }
   });
+}
+
+type AddressLike = {
+  addressLine1: string;
+  addressLine2: string | null;
+  city: string;
+  state: string;
+  postcode: string;
+  country: string;
+  phone: string | null;
+};
+
+/**
+ * The consignee printed on the PDF: the consignee buyer (or the buyer) with a ship-to address —
+ * the linked invoice's shipping address, else the buyer's default shipping address.
+ */
+function consigneeWithAddress(packingList: {
+  invoice: { shippingAddress: AddressLike | null } | null;
+  buyer: ({ addresses: (AddressLike & { isShippingDefault: boolean })[] } & Record<string, unknown>) | null;
+  consigneeBuyer: ({ addresses: (AddressLike & { isShippingDefault: boolean })[] } & Record<string, unknown>) | null;
+}): Record<string, unknown> | null {
+  const party = packingList.consigneeBuyer || packingList.buyer;
+  if (!party) return null;
+  const { addresses, ...partyFields } = party;
+  const address = (packingList.invoice?.shippingAddress && !packingList.consigneeBuyer ? packingList.invoice.shippingAddress : null)
+    ?? addresses.find((item) => item.isShippingDefault)
+    ?? addresses[0]
+    ?? null;
+  if (!address) return partyFields;
+  return {
+    ...partyFields,
+    addressLine1: address.addressLine1,
+    addressLine2: address.addressLine2,
+    city: address.city,
+    state: address.state,
+    postcode: address.postcode,
+    country: address.country,
+    phone: (partyFields.phone as string | null) || address.phone
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

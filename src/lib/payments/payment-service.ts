@@ -28,6 +28,7 @@ export async function getPaymentEntryData(context: TenantContext) {
     where: {
       organisationId: tenant.organisationId,
       status: { in: ["issued", "partially_paid"] },
+      documentType: "tax_invoice",
       balanceDue: { gt: new Prisma.Decimal(0) }
     },
     include: { buyer: true },
@@ -64,6 +65,9 @@ export async function recordPayment(context: TenantContext, input: PaymentInput)
     });
 
     if (!invoice) throw new Error("Invoice not found.");
+    if (invoice.documentType === "proforma") {
+      throw new Error("Payments are recorded against the tax invoice. Convert this proforma to a tax invoice first.");
+    }
     if (invoice.status !== "issued" && invoice.status !== "partially_paid") {
       throw new Error("Payments can only be recorded against issued invoices with a balance.");
     }

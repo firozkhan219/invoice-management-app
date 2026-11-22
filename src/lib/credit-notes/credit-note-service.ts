@@ -100,6 +100,7 @@ export async function createCreditNoteDraft(context: TenantContext, input: Credi
     });
 
     if (!invoice) throw new Error("Invoice not found.");
+    if (invoice.documentType === "proforma") throw new Error("Credit notes can only be raised against a tax invoice, not a proforma.");
     if (!canCreateCreditNoteForInvoice(invoice.status)) {
       throw new Error("Credit notes can only be created for issued, partially paid, or paid invoices.");
     }

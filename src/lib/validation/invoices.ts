@@ -10,6 +10,8 @@ const optionalAmount = (max?: number) =>
   z.preprocess(blankToUndefined, (max === undefined ? z.coerce.number().min(0) : z.coerce.number().min(0).max(max)).optional());
 
 export const invoiceDraftSchema = z.object({
+  /** Only read when the draft is created. */
+  documentType: z.enum(["tax_invoice", "proforma"]).optional().or(z.literal("")).transform((value) => value || undefined),
   companyId: optionalUuid,
   buyerId: optionalUuid,
   consigneeBuyerId: optionalUuid,

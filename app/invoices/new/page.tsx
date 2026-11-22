@@ -7,7 +7,12 @@ import { hasPermission } from "@/lib/permissions/roles";
 import { todayIso } from "@/lib/dates";
 import { QuickInvoiceForm } from "./quick-invoice-form";
 
-export default async function NewInvoicePage() {
+export default async function NewInvoicePage({
+  searchParams
+}: {
+  searchParams?: Promise<{ type?: string }>;
+}) {
+  const proforma = (await searchParams)?.type === "proforma";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const context = await getTenantContextForUser(user.id);
@@ -23,8 +28,12 @@ export default async function NewInvoicePage() {
       <header className="page-header">
         <div>
           <p className="muted">Invoices</p>
-          <h1>New invoice</h1>
-          <p className="muted">Pick the buyer, add products, save. Export and shipping fields can be added later on the invoice page.</p>
+          <h1>{proforma ? "New proforma invoice" : "New invoice"}</h1>
+          <p className="muted">
+            {proforma
+              ? "A proforma is the quotation you send before the sale. It gets its own PI number, does not count as a sale, and can be converted to a tax invoice later."
+              : "Pick the buyer, add products, save. Export and shipping fields can be added later on the invoice page."}
+          </p>
         </div>
       </header>
       {editor.companies.length === 0 ? (
@@ -50,7 +59,8 @@ export default async function NewInvoicePage() {
           taxMode: editor.settings?.defaultTaxMode || "automatic",
           notes: editor.settings?.defaultNotes || ""
         }}
-        canIssue={hasPermission(context.role, "invoices:issue") && editor.series.length > 0}
+        canIssue={hasPermission(context.role, "invoices:issue") && (proforma || editor.series.length > 0)}
+        proforma={proforma}
       />
     </AppShell>
   );

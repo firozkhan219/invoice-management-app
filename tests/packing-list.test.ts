@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculatePackingTotals, lineVolumeCbm } from "@/lib/packing-lists/calculation";
+import { calculatePackingTotals, cartonRangeLabel, lineCartonCount, lineVolumeCbm, resolveCartonLine } from "@/lib/packing-lists/calculation";
 import { packingListIssueRequirements } from "@/lib/packing-lists/packing-list-service";
 import { packingListPdfFilename, renderPackingListPdf } from "@/lib/packing-lists/packing-list-pdf";
 import { InMemoryTenantRepository, type TenantRecord } from "@/lib/repositories/tenant-repository";
@@ -38,6 +38,43 @@ describe("packing list calculations", () => {
     expect(totals.netWeightKg.toString()).toBe("11");
     expect(totals.grossWeightKg.toString()).toBe("14");
     expect(totals.volumeCbm.toString()).toBe("0.003");
+  });
+});
+
+describe("carton-wise packing lines", () => {
+  it("counts cartons in a range and labels it", () => {
+    expect(lineCartonCount({ cartonFrom: 2, cartonTo: 8 })).toBe(7);
+    expect(lineCartonCount({ cartonFrom: 22, cartonTo: null })).toBe(1);
+    expect(lineCartonCount({})).toBe(1);
+    expect(cartonRangeLabel({ cartonFrom: 2, cartonTo: 8 })).toBe("2 to 8");
+    expect(cartonRangeLabel({ cartonFrom: 1, cartonTo: 1 })).toBe("01");
+    expect(cartonRangeLabel({ packageNo: "Box A" })).toBe("Box A");
+  });
+
+  it("works out pieces and weights from per-carton and per-piece values", () => {
+    // Cartons 2 to 8, 10 pcs each, 0.640 kg net per piece, 9 kg gross per carton.
+    const line = resolveCartonLine({ cartonFrom: 2, cartonTo: 8, piecesPerCarton: 10, netWeightPerPieceKg: 0.64, grossWeightPerCartonKg: 9 });
+    expect(line.cartons).toBe(7);
+    expect(line.quantity.toString()).toBe("70");
+    expect(line.netWeightKg.toString()).toBe("44.8");
+    expect(line.grossWeightKg.toString()).toBe("63");
+  });
+
+  it("keeps typed totals when per-unit values are missing", () => {
+    const line = resolveCartonLine({ quantity: 5, netWeightKg: 6, grossWeightKg: 7 });
+    expect(line.quantity.toString()).toBe("5");
+    expect(line.netWeightKg.toString()).toBe("6");
+    expect(line.grossWeightKg.toString()).toBe("7");
+  });
+
+  it("counts cartons and multiplies volume across a range", () => {
+    const totals = calculatePackingTotals([
+      { cartonFrom: 1, cartonTo: 1, quantity: 600, netWeightKg: 12, grossWeightKg: 14.6 },
+      { cartonFrom: 2, cartonTo: 8, quantity: 70, netWeightKg: 44.8, grossWeightKg: 63, lengthCm: 100, widthCm: 50, heightCm: 20 }
+    ]);
+    expect(totals.packageCount).toBe(8);
+    expect(totals.grossWeightKg.toString()).toBe("77.6");
+    expect(totals.volumeCbm.toString()).toBe("0.7");
   });
 });
 

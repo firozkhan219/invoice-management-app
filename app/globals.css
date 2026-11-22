@@ -2685,3 +2685,14 @@ aside .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .status-badge.overdue { background: #fef3f2; color: var(--danger); margin-left: 6px; }
 .stat-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--danger); text-underline-offset: 3px; }
 .button.danger-text { color: var(--danger); }
+
+/* ---------- Carton-wise packing rows ---------- */
+.pack-line.ctn { grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.8fr) minmax(0, 2.8fr) minmax(0, 0.8fr) minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(0, 2fr) 70px; }
+.pack-range { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.pack-line-group { display: grid; gap: 2px; }
+.pack-line-summary { margin: 0 0 4px; font-size: 12px; }
+@media (max-width: 900px) {
+  .pack-line.ctn { grid-template-columns: 1fr 1fr 1fr; }
+  .pack-line.ctn .pack-range { grid-column: 1 / -1; }
+}
+.badge.doc-type { margin-left: 6px; }
