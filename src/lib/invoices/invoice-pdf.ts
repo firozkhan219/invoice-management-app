@@ -171,7 +171,7 @@ function drawHeader(doc: PDFKit.PDFDocument, data: InvoicePdfData, y: number): n
   });
   let rightY = doc.y + 6;
   const facts: Array<[string, string]> = [
-    [isCredit ? "Credit note no." : "Invoice no.", data.invoiceNumber],
+    [isCredit ? "Credit note no." : data.documentTitle === "Proforma Invoice" ? "Proforma no." : "Invoice no.", data.invoiceNumber],
     ["Date", formatDate(data.invoiceDate)],
     ["Due date", data.dueDate ? formatDate(data.dueDate) : ""],
     isCredit

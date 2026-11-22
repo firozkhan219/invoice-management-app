@@ -13,6 +13,8 @@ export async function GET(request: Request) {
   const csv = await invoiceRegisterCsv(context, {
     q: url.searchParams.get("q") || undefined,
     status: url.searchParams.get("status") || undefined,
+    // The sales register lists tax invoices unless proformas are asked for explicitly.
+    type: url.searchParams.get("type") === "proforma" ? "proforma" : "tax_invoice",
     currency: url.searchParams.get("currency") || undefined,
     dateFrom: url.searchParams.get("dateFrom") || undefined,
     dateTo: url.searchParams.get("dateTo") || undefined

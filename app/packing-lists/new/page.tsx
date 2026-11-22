@@ -26,6 +26,12 @@ export default async function NewPackingListPage({ searchParams }: { searchParam
     companyId: invoice.companyId || "",
     buyerId: invoice.buyerId || "",
     exportReference: invoice.exporterReference || "",
+    buyerOrderNumber: invoice.buyerOrderNumber || "",
+    buyerOrderDate: invoice.buyerOrderDate ? invoice.buyerOrderDate.toISOString().slice(0, 10) : "",
+    preCarriageBy: invoice.preCarriageBy || "",
+    placeOfReceipt: invoice.placeOfReceipt || "",
+    vesselFlightNo: invoice.vesselFlightNo || "",
+    termsOfDelivery: invoice.termsOfDelivery || "",
     portOfLoading: invoice.portOfLoading || "",
     portOfDischarge: invoice.portOfDischarge || "",
     finalDestination: invoice.finalDestination || "",
@@ -48,7 +54,7 @@ export default async function NewPackingListPage({ searchParams }: { searchParam
         <div>
           <p className="muted">Packing Lists</p>
           <h1>New packing list</h1>
-          <p className="muted">Copy products from an invoice (or pick them yourself), fill in the boxes and weights, save.</p>
+          <p className="muted">Copy products from an invoice (or pick them yourself), enter cartons, pieces and weights, save.</p>
         </div>
       </header>
       {data.companies.length === 0 ? (

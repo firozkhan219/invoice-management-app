@@ -537,6 +537,8 @@ model Invoice {
   shippingAddressId     String?       @map("shipping_address_id") @db.Char(36)
   bankAccountId         String?       @map("bank_account_id") @db.Char(36)
   status                InvoiceStatus @default(draft)
+  documentType          InvoiceDocumentType @default(tax_invoice) @map("document_type")
+  sourceProformaId      String?       @map("source_proforma_id") @db.Char(36)
   seriesId              String?       @map("series_id") @db.Char(36)
   invoiceNumber         String?       @map("invoice_number") @db.VarChar(120)
   sequenceNumber        Int?          @map("sequence_number")
@@ -599,6 +601,8 @@ model Invoice {
   updatedBy       User?               @relation("InvoiceUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
   issuedBy        User?               @relation("InvoiceIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
   cancelledBy     User?               @relation("InvoiceCanceller", fields: [cancelledById], references: [id], onDelete: SetNull)
+  sourceProforma  Invoice?      @relation("ProformaConversion", fields: [sourceProformaId], references: [id], onDelete: SetNull)
+  convertedInvoices Invoice[]   @relation("ProformaConversion")
   items           InvoiceItem[]
   revisions       InvoiceRevision[]
   documents       GeneratedDocument[]
@@ -609,6 +613,8 @@ model Invoice {
   @@index([organisationId, status, invoiceDate])
   @@index([organisationId, buyerId])
   @@index([organisationId, invoiceNumber])
+  @@index([organisationId, documentType, status])
+  @@index([sourceProformaId])
   @@unique([organisationId, invoiceNumber])
   @@map("invoices")
 }
@@ -663,6 +669,14 @@ model PackingList {
   portOfLoading    String?           @map("port_of_loading") @db.VarChar(120)
   portOfDischarge  String?           @map("port_of_discharge") @db.VarChar(120)
   finalDestination String?           @map("final_destination") @db.VarChar(120)
+  buyerOrderNumber String?           @map("buyer_order_number") @db.VarChar(120)
+  buyerOrderDate   DateTime?         @map("buyer_order_date") @db.Date
+  preCarriageBy    String?           @map("pre_carriage_by") @db.VarChar(120)
+  placeOfReceipt   String?           @map("place_of_receipt") @db.VarChar(120)
+  vesselFlightNo   String?           @map("vessel_flight_no") @db.VarChar(120)
+  termsOfDelivery  String?           @map("terms_of_delivery") @db.Text
+  countryOfOrigin  String?           @map("country_of_origin") @db.VarChar(80)
+  countryOfFinalDestination String?  @map("country_of_final_destination") @db.VarChar(80)
   totalPackages    Int               @default(0) @map("total_packages")
   totalQuantity    Decimal           @default(0) @map("total_quantity") @db.Decimal(18, 4)
   totalNetWeightKg Decimal           @default(0) @map("total_net_weight_kg") @db.Decimal(18, 4)
@@ -701,6 +715,11 @@ model PackingListLine {
   invoiceItemId   String?  @map("invoice_item_id") @db.Char(36)
   sortOrder       Int      @map("sort_order")
   packageNo       String?  @map("package_no") @db.VarChar(80)
+  cartonFrom      Int?     @map("carton_from")
+  cartonTo        Int?     @map("carton_to")
+  piecesPerCarton Decimal? @map("pieces_per_carton") @db.Decimal(18, 4)
+  netWeightPerPieceKg Decimal? @map("net_weight_per_piece_kg") @db.Decimal(18, 6)
+  grossWeightPerCartonKg Decimal? @map("gross_weight_per_carton_kg") @db.Decimal(18, 4)
   marksAndNumbers String?  @map("marks_and_numbers") @db.VarChar(160)
   sku             String?  @db.VarChar(80)
   description     String   @db.Text
@@ -927,6 +946,11 @@ enum InvoiceStatus {
 enum PaymentStatus {
   posted
   reversed
+}
+
+enum InvoiceDocumentType {
+  tax_invoice
+  proforma
 }
 
 enum CreditNoteStatus {

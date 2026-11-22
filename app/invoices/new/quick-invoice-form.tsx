@@ -13,6 +13,7 @@ export type QuickInvoiceProps = {
   bankAccounts: Option[];
   defaults: { companyId: string; bankAccountId: string; invoiceDate: string; taxMode: string; notes: string };
   canIssue: boolean;
+  proforma?: boolean;
 };
 
 type Line = { key: number; itemId: string; description: string; hsn: string; unit: string; quantity: string; rate: string; gst: string };
@@ -20,7 +21,7 @@ type Line = { key: number; itemId: string; description: string; hsn: string; uni
 let nextKey = 1;
 const emptyLine = (): Line => ({ key: nextKey++, itemId: "", description: "", hsn: "", unit: "", quantity: "1", rate: "", gst: "" });
 
-export function QuickInvoiceForm({ products, buyers, companies, bankAccounts, defaults, canIssue }: QuickInvoiceProps) {
+export function QuickInvoiceForm({ products, buyers, companies, bankAccounts, defaults, canIssue, proforma = false }: QuickInvoiceProps) {
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
 
@@ -41,6 +42,7 @@ export function QuickInvoiceForm({ products, buyers, companies, bankAccounts, de
 
   return (
     <form className="quick-invoice" action="/api/invoices/quick" method="post">
+      <input type="hidden" name="documentType" value={proforma ? "proforma" : "tax_invoice"} />
       <section className="panel">
         <h2>1. Who is it for?</h2>
         <div className="form-grid">
@@ -158,7 +160,7 @@ export function QuickInvoiceForm({ products, buyers, companies, bankAccounts, de
       <div className="quick-actions">
         <button className="button subtle" type="submit" name="intent" value="draft" disabled={!filled.length}>Save draft</button>
         {canIssue ? (
-          <button className="button" type="submit" name="intent" value="issue" disabled={!filled.length}>Save &amp; issue invoice</button>
+          <button className="button" type="submit" name="intent" value="issue" disabled={!filled.length}>{proforma ? "Save & issue proforma" : <>Save &amp; issue invoice</>}</button>
         ) : null}
       </div>
     </form>

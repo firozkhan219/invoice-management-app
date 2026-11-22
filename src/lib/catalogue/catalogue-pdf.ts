@@ -130,21 +130,24 @@ function drawCard(doc: PDFKit.PDFDocument, slot: Slot, product: CatalogueProduct
   const pad = perPage === 4 ? 8 : 12;
   const innerWidth = slot.width - pad * 2;
 
-  // Reserve space for details under the photo (2-per-page puts details beside the photo).
-  const sideBySide = perPage === 2;
-  const detailsWidth = sideBySide ? innerWidth * 0.42 : innerWidth;
-  // Never let details take more than ~45% of a card, so the photo stays the hero.
-  const detailsHeight = sideBySide
-    ? 0
-    : Math.min(estimateDetailsHeight(doc, lines, detailsWidth, nameSize, bodySize, perPage), Math.floor(slot.height * 0.45));
-  const photo = sideBySide
-    ? { x: slot.x + pad, y: slot.y + pad, width: innerWidth - detailsWidth - pad, height: slot.height - pad * 2 }
-    : { x: slot.x + pad, y: slot.y + pad, width: innerWidth, height: slot.height - pad * 2 - detailsHeight - (lines.length ? 8 : 0) };
+  // Details always sit underneath the photo, at every layout. Cap them at ~45% of the card so the
+  // photo stays the hero.
+  const detailsWidth = innerWidth;
+  const detailsHeight = Math.min(
+    estimateDetailsHeight(doc, lines, detailsWidth, nameSize, bodySize, perPage),
+    Math.floor(slot.height * 0.45)
+  );
+  const photo = {
+    x: slot.x + pad,
+    y: slot.y + pad,
+    width: innerWidth,
+    height: slot.height - pad * 2 - detailsHeight - (lines.length ? 8 : 0)
+  };
 
   drawPhoto(doc, photo, product.image);
 
-  const detailsX = sideBySide ? photo.x + photo.width + pad : slot.x + pad;
-  const detailsY = sideBySide ? slot.y + pad : photo.y + photo.height + 8;
+  const detailsX = slot.x + pad;
+  const detailsY = photo.y + photo.height + 8;
   const detailsBottom = slot.y + slot.height - pad;
   let y = detailsY;
 
@@ -159,7 +162,7 @@ function drawCard(doc: PDFKit.PDFDocument, slot: Slot, product: CatalogueProduct
       doc.text(line.value, detailsX, y, { width: detailsWidth, height: remaining, ellipsis: true, lineBreak: false });
     } else if (line.kind === "description") {
       doc.fillColor(colors.muted).font("Helvetica").fontSize(bodySize);
-      const maxLines = perPage === 1 ? 6 : perPage === 2 ? 8 : 2;
+      const maxLines = descriptionLines(perPage);
       doc.text(line.value, detailsX, y, { width: detailsWidth, height: Math.min(remaining, bodySize * 1.25 * maxLines), ellipsis: true });
     } else {
       doc.font("Helvetica-Bold").fontSize(bodySize).fillColor(colors.muted);
@@ -218,14 +221,18 @@ function estimateDetailsHeight(
       height += Math.min(doc.heightOfString(line.value, { width }), nameSize * 2.6) + 3;
     } else if (line.kind === "description") {
       doc.font("Helvetica").fontSize(bodySize);
-      const maxLines = perPage === 1 ? 6 : 2;
+      const maxLines = descriptionLines(perPage);
       height += Math.min(doc.heightOfString(line.value, { width }), bodySize * 1.25 * maxLines) + 2;
     } else {
       height += (line.kind === "price" ? bodySize + 1.5 : bodySize) * 1.25 + 2;
     }
   }
-  // Never let details take more than ~45% of a card (keeps the photo the hero).
   return Math.ceil(height);
+}
+
+/** How many lines of description fit under the photo at each layout. */
+function descriptionLines(perPage: CatalogueLayout): number {
+  return perPage === 1 ? 6 : perPage === 2 ? 3 : 2;
 }
 
 function drawPhoto(doc: PDFKit.PDFDocument, box: Slot, image: CatalogueImage | null) {

@@ -1,10 +1,17 @@
 import PDFDocument from "pdfkit";
+import { cartonRangeLabel, lineCartonCount } from "@/lib/packing-lists/calculation";
 
 type JsonRecord = Record<string, unknown>;
+type Num = string | number | null | undefined;
 
 export type PackingListPdfLine = {
   sortOrder: number;
   packageNo?: string | null;
+  cartonFrom?: number | null;
+  cartonTo?: number | null;
+  piecesPerCarton?: Num;
+  netWeightPerPieceKg?: Num;
+  grossWeightPerCartonKg?: Num;
   marksAndNumbers?: string | null;
   sku?: string | null;
   description: string;
@@ -13,9 +20,9 @@ export type PackingListPdfLine = {
   unitCode?: string | null;
   netWeightKg: string | number;
   grossWeightKg: string | number;
-  lengthCm?: string | number | null;
-  widthCm?: string | number | null;
-  heightCm?: string | number | null;
+  lengthCm?: Num;
+  widthCm?: Num;
+  heightCm?: Num;
   volumeCbm: string | number;
 };
 
@@ -25,23 +32,25 @@ export type PackingListPdfData = {
   invoiceNumber?: string | null;
   invoiceDate?: Date | null;
   exportReference?: string | null;
+  buyerOrderNumber?: string | null;
+  buyerOrderDate?: Date | null;
   containerNumber?: string | null;
   sealNumber?: string | null;
   shipmentMode?: string | null;
+  preCarriageBy?: string | null;
+  placeOfReceipt?: string | null;
+  vesselFlightNo?: string | null;
   portOfLoading?: string | null;
   portOfDischarge?: string | null;
   finalDestination?: string | null;
+  termsOfDelivery?: string | null;
+  countryOfOrigin?: string | null;
+  countryOfFinalDestination?: string | null;
   company: JsonRecord | null;
   buyer: JsonRecord | null;
   consignee: JsonRecord | null;
-  logo?: {
-    data: Buffer;
-    mimeType: string;
-  } | null;
-  signature?: {
-    data: Buffer;
-    mimeType: string;
-  } | null;
+  logo?: { data: Buffer; mimeType: string } | null;
+  signature?: { data: Buffer; mimeType: string } | null;
   lines: PackingListPdfLine[];
   totals: {
     packages: string | number;
@@ -55,24 +64,23 @@ export type PackingListPdfData = {
   draft?: boolean;
 };
 
-const page = { margin: 28, right: 567, bottom: 812 };
-const tableX = page.margin;
-const tableWidth = page.right - page.margin;
-// Must add up to tableWidth (539pt on A4 with 28pt margins) or the last column runs off the page.
-const widths = { marks: 70, sku: 62, description: 152, quantity: 48, net: 46, gross: 50, dimensions: 65, cbm: 46 };
-// Same calm palette as the invoice PDF so documents sent together look like one set.
-const colors = {
-  ink: "#1f2a44",
-  muted: "#6b7a90",
-  border: "#e2e8f0",
-  soft: "#f3f6fb",
-  primary: "#2855c5",
-  primaryLight: "#eaf0fc"
-};
+// A4 portrait, laid out like a customs "Packing & weight list": one ruled frame, export header grid,
+// carton-wise lines, weight totals and the declaration / signature boxes.
+const A4 = { width: 595.28, height: 841.89 };
+const left = 28;
+const right = 567;
+const width = right - left;
+const frameTop = 44;
+const frameBottom = 806;
+const footerHeight = 118;
+const headerRowHeight = 26;
+// Columns must add up to the frame width (539pt).
+const cols = { ctn: 62, item: 46, description: 271, qty: 52, perPiece: 50, total: 58 };
+const colors = { ink: "#111111", muted: "#444444", rule: "#333333", soft: "#f2f2f2" };
 
 export function renderPackingListPdf(data: PackingListPdfData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "A4", margin: page.margin, bufferPages: true });
+    const doc = new PDFDocument({ size: "A4", margin: left, bufferPages: true });
     const chunks: Buffer[] = [];
 
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -91,206 +99,332 @@ export function packingListPdfFilename(packingListNumber: string): string {
 }
 
 function drawPackingList(doc: PDFKit.PDFDocument, data: PackingListPdfData) {
-  doc.lineWidth(0.6).strokeColor(colors.border).fillColor(colors.ink);
-  drawDocumentTitle(doc);
+  doc.lineWidth(0.6).strokeColor(colors.rule).fillColor(colors.ink);
 
-  let y = drawHeader(doc, data, 72);
-  y = drawPartyGrid(doc, data, y);
-  y = drawShipmentGrid(doc, data, y);
-  y = drawLinesTable(doc, data.lines, y);
-  y = drawTotals(doc, data, y);
-  drawDeclaration(doc, data, y);
-}
+  drawTitle(doc, "Packing & weight list");
+  let y = drawHeaderGrid(doc, data, frameTop);
+  let tableTop = y;
+  drawTableHeader(doc, y);
+  y += headerRowHeight + 6;
 
-function drawDocumentTitle(doc: PDFKit.PDFDocument) {
-  doc.roundedRect(page.margin, 26, tableWidth, 34, 6).fill(colors.primary);
-  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(15).text("Packing List", page.margin + 14, 36, {
-    width: 250
-  });
-  doc.font("Helvetica").fontSize(8).text(`Generated ${formatDate(new Date())}`, page.margin, 38, {
-    width: tableWidth - 14,
-    align: "right"
-  });
-  doc.fillColor(colors.ink);
-}
-
-function drawHeader(doc: PDFKit.PDFDocument, data: PackingListPdfData, y: number): number {
-  const leftW = 300;
-  const rightW = tableWidth - leftW;
-  const companyName = text(data.company, "legalName", "Company");
-  drawCell(doc, tableX, y, leftW, 98, "Exporter", [
-    companyName,
-    text(data.company, "tradingName"),
-    ...formatAddressLines(data.company),
-    ids(data.company).join(" | ")
-  ], true);
-  drawBrandMark(doc, tableX + leftW - 54, y + 12, companyName, data.logo);
-
-  const rightX = tableX + leftW;
-  drawCell(doc, rightX, y, rightW / 2, 49, "Packing list no.", [data.packingListNumber], true);
-  drawCell(doc, rightX + rightW / 2, y, rightW / 2, 49, "Packing list date", [formatDate(data.packingListDate)]);
-  drawCell(doc, rightX, y + 49, rightW / 2, 49, "Invoice reference", [
-    [data.invoiceNumber, data.invoiceDate ? formatDate(data.invoiceDate) : ""].filter(Boolean).join(" - ") || "-"
-  ]);
-  drawCell(doc, rightX + rightW / 2, y + 49, rightW / 2, 49, "Export reference", [data.exportReference || text(data.company, "iec") || "-"]);
-
-  return y + 98;
-}
-
-function drawPartyGrid(doc: PDFKit.PDFDocument, data: PackingListPdfData, y: number): number {
-  const half = tableWidth / 2;
-  drawCell(doc, tableX, y, half, 88, "Buyer", [
-    text(data.buyer, "displayName", text(data.buyer, "legalName", "-")),
-    ...formatAddressLines(data.buyer),
-    ids(data.buyer).join(" | ")
-  ]);
-  drawCell(doc, tableX + half, y, half, 88, "Consignee / ship to", [
-    text(data.consignee, "displayName", text(data.buyer, "displayName", "-")),
-    ...formatAddressLines(data.consignee),
-    ids(data.consignee).join(" | ")
-  ]);
-  return y + 88;
-}
-
-function drawShipmentGrid(doc: PDFKit.PDFDocument, data: PackingListPdfData, y: number): number {
-  const third = tableWidth / 3;
-  drawCell(doc, tableX, y, third, 38, "Shipment mode", [data.shipmentMode || "-"]);
-  drawCell(doc, tableX + third, y, third, 38, "Container no.", [data.containerNumber || "-"]);
-  drawCell(doc, tableX + third * 2, y, third, 38, "Seal no.", [data.sealNumber || "-"]);
-  drawCell(doc, tableX, y + 38, third, 38, "Port of loading", [data.portOfLoading || "-"]);
-  drawCell(doc, tableX + third, y + 38, third, 38, "Port of discharge", [data.portOfDischarge || "-"]);
-  drawCell(doc, tableX + third * 2, y + 38, third, 38, "Final destination", [data.finalDestination || "-"]);
-  return y + 76;
-}
-
-function drawLinesTable(doc: PDFKit.PDFDocument, lines: PackingListPdfLine[], startY: number): number {
-  let y = startY;
-  drawLineHeader(doc, y);
-  y += 36;
-
-  lines.forEach((line) => {
-    const itemCell = [line.sku, line.hsnSac ? `HSN ${line.hsnSac}` : ""].filter(Boolean).join("\n") || "-";
-    doc.font("Helvetica").fontSize(7.3); // measure with the same font drawPlainCell uses
-    const rowHeight = Math.max(
-      32,
-      doc.heightOfString(line.description, { width: widths.description - 6 }) + 15,
-      doc.heightOfString(itemCell, { width: widths.sku - 6 }) + 15
-    );
-    if (y + rowHeight + 112 > page.bottom) {
+  const rows = data.lines.map((line) => ({ line, height: rowHeight(doc, line) }));
+  for (const row of rows) {
+    if (y + row.height > frameBottom - 4) {
+      closeTable(doc, tableTop, frameBottom);
       doc.addPage();
-      y = page.margin;
-      drawLineHeader(doc, y);
-      y += 36;
+      drawTitle(doc, `Packing & weight list - ${data.packingListNumber} (continued)`);
+      tableTop = frameTop;
+      drawTableHeader(doc, tableTop);
+      y = tableTop + headerRowHeight + 6;
     }
-
-    const dimensions = [line.lengthCm, line.widthCm, line.heightCm].filter(Boolean).join(" x ");
-    const cells = [
-      { value: [line.packageNo || `Line ${line.sortOrder}`, line.marksAndNumbers || ""].filter(Boolean).join("\n"), width: widths.marks, align: "left" as const },
-      { value: itemCell, width: widths.sku, align: "left" as const },
-      { value: line.description, width: widths.description, align: "left" as const },
-      { value: `${formatQty(line.quantity)} ${line.unitCode || ""}`.trim(), width: widths.quantity, align: "right" as const },
-      { value: formatQty(line.netWeightKg), width: widths.net, align: "right" as const },
-      { value: formatQty(line.grossWeightKg), width: widths.gross, align: "right" as const },
-      { value: dimensions || "-", width: widths.dimensions, align: "center" as const },
-      { value: formatCbm(line.volumeCbm), width: widths.cbm, align: "right" as const }
-    ];
-
-    let x = tableX;
-    cells.forEach((cell) => {
-      drawPlainCell(doc, x, y, cell.width, rowHeight, cell.value, cell.align);
-      x += cell.width;
-    });
-    y += rowHeight;
-  });
-
-  return y;
-}
-
-function drawLineHeader(doc: PDFKit.PDFDocument, y: number) {
-  const headers = [
-    ["Package / Marks", widths.marks],
-    ["Item / HSN", widths.sku],
-    ["Description", widths.description],
-    ["Qty", widths.quantity],
-    ["Net KG", widths.net],
-    ["Gross KG", widths.gross],
-    ["Dimensions CM", widths.dimensions],
-    ["CBM", widths.cbm]
-  ] as const;
-
-  let x = tableX;
-  headers.forEach(([label, width]) => {
-    doc.rect(x, y, width, 36).fillAndStroke(colors.soft, colors.border);
-    doc.fillColor(colors.ink).font("Helvetica-Bold").fontSize(7.3).text(label, x + 3, y + 9, {
-      width: width - 6,
-      align: width <= 64 ? "center" : "left"
-    });
-    x += width;
-  });
-}
-
-function drawTotals(doc: PDFKit.PDFDocument, data: PackingListPdfData, y: number): number {
-  if (y + 80 > page.bottom) {
-    doc.addPage();
-    y = page.margin;
+    drawRow(doc, row.line, y);
+    y += row.height;
   }
 
-  const width = tableWidth / 5;
-  const rows = [
-    ["Packages", String(data.totals.packages)],
-    ["Quantity", formatQty(data.totals.quantity)],
-    ["Net weight", `${formatQty(data.totals.netWeightKg)} KG`],
-    ["Gross weight", `${formatQty(data.totals.grossWeightKg)} KG`],
-    ["Volume", `${formatCbm(data.totals.volumeCbm)} CBM`]
-  ] as const;
-
-  rows.forEach(([label, value], index) => {
-    drawCell(doc, tableX + width * index, y, width, 58, label, [value], true);
-  });
-
-  return y + 58;
+  // The totals and declaration sit at the foot of the last page, under the table columns.
+  if (y > frameBottom - footerHeight) {
+    closeTable(doc, tableTop, frameBottom);
+    doc.addPage();
+    drawTitle(doc, `Packing & weight list - ${data.packingListNumber} (continued)`);
+    tableTop = frameTop;
+    drawTableHeader(doc, tableTop);
+  }
+  closeTable(doc, tableTop, frameBottom - footerHeight);
+  drawFooter(doc, data, frameBottom - footerHeight);
 }
 
-function drawDeclaration(doc: PDFKit.PDFDocument, data: PackingListPdfData, y: number) {
-  if (y + 112 > page.bottom) {
-    doc.addPage();
-    y = page.margin;
+function drawTitle(doc: PDFKit.PDFDocument, title: string) {
+  doc.fillColor(colors.ink).font("Helvetica-Bold").fontSize(12).text(title, left, 24, { width, align: "center" });
+}
+
+/** Export header: exporter / references, consignee / buyer, then carriage and route boxes. */
+function drawHeaderGrid(doc: PDFKit.PDFDocument, data: PackingListPdfData, top: number): number {
+  const leftW = 290;
+  const rightX = left + leftW;
+  const rightW = width - leftW;
+  const company = data.company;
+  const companyName = text(company, "legalName", "Company");
+
+  // Block 1: exporter | invoice no. & date, exporter's ref, buyer's order, buyer (if other than consignee)
+  const block1 = 96;
+  box(doc, left, top, leftW, block1);
+  label(doc, "EXPORTER", left, top);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(colors.ink).text(companyName, left + 4, top + 12, { width: leftW - 60 });
+  const companyLines = [
+    ...addressLines(company),
+    text(company, "phone") ? `Tel#: ${text(company, "phone")}` : "",
+    text(company, "email")
+  ].filter(Boolean);
+  doc.font("Helvetica-Bold").fontSize(7.8).text(companyLines.join("\n"), left + 4, doc.y + 1, { width: leftW - 60, height: block1 - (doc.y - top) - 4, ellipsis: true });
+  drawLogo(doc, left + leftW - 52, top + 8, data.logo);
+
+  const invoiceW = rightW * 0.6;
+  box(doc, rightX, top, invoiceW, 30);
+  label(doc, "Invoice No. & Date", rightX, top);
+  value(doc, invoiceReference(data), rightX, top, invoiceW);
+  box(doc, rightX + invoiceW, top, rightW - invoiceW, 30);
+  label(doc, "Exporter's Ref.", rightX + invoiceW, top);
+  value(doc, data.exportReference || (text(company, "iec") ? `IEC # ${text(company, "iec")}` : ""), rightX + invoiceW, top, rightW - invoiceW);
+
+  box(doc, rightX, top + 30, rightW, 33);
+  label(doc, "Buyer's Order No. & Date", rightX, top + 30);
+  value(doc, [data.buyerOrderNumber, data.buyerOrderDate ? `DT: ${formatDate(data.buyerOrderDate)}` : ""].filter(Boolean).join(" "), rightX, top + 30, rightW);
+
+  box(doc, rightX, top + 63, rightW, block1 - 63);
+  label(doc, "Buyer (if other than consignee)", rightX, top + 63);
+  const buyerIsConsignee = !data.consignee || text(data.consignee, "id") === text(data.buyer, "id");
+  value(doc, buyerIsConsignee ? "" : partyName(data.buyer), rightX, top + 63, rightW);
+
+  // Block 2: consignee | packing list no., GSTIN | country of origin / final destination
+  const top2 = top + block1;
+  const block2 = 92;
+  const consignee = data.consignee || data.buyer;
+  box(doc, left, top2, leftW, block2);
+  label(doc, "Consignee", left, top2);
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(colors.ink).text(partyName(consignee), left + 4, top2 + 12, { width: leftW - 8 });
+  const consigneeLines = [
+    ...addressLines(consignee),
+    text(consignee, "phone") ? `TEL: ${text(consignee, "phone")}` : ""
+  ].filter(Boolean);
+  doc.font("Helvetica-Bold").fontSize(7.8).text(consigneeLines.join("\n"), left + 4, doc.y + 1, { width: leftW - 8, height: block2 - (doc.y - top2) - 4, ellipsis: true });
+
+  box(doc, rightX, top2, rightW, block2 - 30);
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(colors.ink).text(
+    [
+      `PACKING LIST NO. ${data.packingListNumber} DT: ${formatDate(data.packingListDate)}`,
+      text(company, "gstin") ? `GST NO - ${text(company, "gstin")}` : "",
+      data.containerNumber || data.sealNumber
+        ? `CONTAINER: ${data.containerNumber || "-"}   SEAL: ${data.sealNumber || "-"}`
+        : ""
+    ].filter(Boolean).join("\n"),
+    rightX + 6,
+    top2 + 10,
+    { width: rightW - 12, lineGap: 3 }
+  );
+  const half = rightW / 2;
+  box(doc, rightX, top2 + block2 - 30, half, 30);
+  label(doc, "Country of Origin", rightX, top2 + block2 - 30);
+  value(doc, (data.countryOfOrigin || "India").toUpperCase(), rightX, top2 + block2 - 30, half);
+  box(doc, rightX + half, top2 + block2 - 30, rightW - half, 30);
+  label(doc, "Country of final destination", rightX + half, top2 + block2 - 30);
+  value(doc, (data.countryOfFinalDestination || data.finalDestination || "").toUpperCase(), rightX + half, top2 + block2 - 30, rightW - half);
+
+  // Block 3: carriage and route (2 x 3 small boxes) | terms of delivery and payment
+  const top3 = top2 + block2;
+  const cell = 26;
+  const smallW = leftW / 2;
+  const route: [string, string | null | undefined][] = [
+    ["Pre-Carriage by", data.preCarriageBy || data.shipmentMode],
+    ["Place of Receipt by Pre-Carrier", data.placeOfReceipt],
+    ["Vessel/Flight No.", data.vesselFlightNo],
+    ["Port of loading", data.portOfLoading],
+    ["Port of discharge", data.portOfDischarge],
+    ["Port of final destination", data.finalDestination]
+  ];
+  route.forEach(([title, content], index) => {
+    const x = left + (index % 2) * smallW;
+    const y = top3 + Math.floor(index / 2) * cell;
+    box(doc, x, y, smallW, cell);
+    label(doc, title, x, y);
+    value(doc, (content || "").toUpperCase(), x, y, smallW);
+  });
+  box(doc, rightX, top3, rightW, cell * 3);
+  doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text("Terms of delivery and payment", rightX, top3 + 3, { width: rightW, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(colors.ink).text(data.termsOfDelivery || "", rightX + 6, top3 + 15, {
+    width: rightW - 12,
+    height: cell * 3 - 18,
+    ellipsis: true
+  });
+
+  return top3 + cell * 3;
+}
+
+function drawTableHeader(doc: PDFKit.PDFDocument, y: number) {
+  const headers: [string, number, "left" | "center"][] = [
+    ["Marks & No.\nCTN NO.", cols.ctn, "left"],
+    ["Item No.", cols.item, "center"],
+    ["Description of Goods", cols.description, "left"],
+    ["Quantity\nin Pcs.", cols.qty, "center"],
+    ["NET WT/\nPC (KG)", cols.perPiece, "center"],
+    ["TOTAL NET\nWT (KG)", cols.total, "center"]
+  ];
+  let x = left;
+  for (const [title, columnWidth, align] of headers) {
+    doc.rect(x, y, columnWidth, headerRowHeight).stroke(colors.rule);
+    doc.font("Helvetica").fontSize(7.3).fillColor(colors.ink).text(title, x + 3, y + 5, { width: columnWidth - 6, align });
+    x += columnWidth;
+  }
+}
+
+/** Draws the column rules from the table header down to `bottom`, plus the frame sides. */
+function closeTable(doc: PDFKit.PDFDocument, tableTop: number, bottom: number) {
+  let x = left;
+  const widthsInOrder = [cols.ctn, cols.item, cols.description, cols.qty, cols.perPiece, cols.total];
+  doc.lineWidth(0.6).strokeColor(colors.rule);
+  doc.moveTo(left, tableTop).lineTo(left, bottom).stroke();
+  for (const [index, columnWidth] of widthsInOrder.entries()) {
+    x += columnWidth;
+    // Like the reference layout, only the number columns are ruled off down the page.
+    if (index >= 2) doc.moveTo(x, tableTop + headerRowHeight).lineTo(x, bottom).stroke();
+  }
+  doc.moveTo(right, tableTop).lineTo(right, bottom).stroke();
+  doc.moveTo(left, bottom).lineTo(right, bottom).stroke();
+}
+
+function rowHeight(doc: PDFKit.PDFDocument, line: PackingListPdfLine): number {
+  doc.font("Helvetica-Bold").fontSize(8.5);
+  // Measure exactly what drawRow prints (upper case is wider than mixed case).
+  const title = doc.heightOfString(line.description.toUpperCase(), { width: cols.description - 8 });
+  const details = detailPairs(line);
+  doc.font("Helvetica").fontSize(6.8);
+  const marks = line.marksAndNumbers ? doc.heightOfString(line.marksAndNumbers, { width: cols.ctn - 4 }) : 0;
+  return Math.max(34, title + 4 + details.length * 9.5 + 14, 26 + marks + 8);
+}
+
+function drawRow(doc: PDFKit.PDFDocument, line: PackingListPdfLine, y: number) {
+  const cartons = lineCartonCount(line);
+  let x = left;
+
+  // CTN NO.: "2 to 8" then "(7 CTNS)", with marks underneath when given.
+  const ctnLabel = cartonRangeLabel(line) || String(line.sortOrder).padStart(2, "0");
+  doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(ctnLabel, x + 2, y, { width: cols.ctn - 4, align: "center" });
+  doc.text(`(${cartons} ${cartons === 1 ? "CTN" : "CTNS"})`, x + 2, doc.y + 1, { width: cols.ctn - 4, align: "center" });
+  if (line.marksAndNumbers) {
+    doc.fontSize(6.8).fillColor(colors.muted).text(line.marksAndNumbers, x + 2, doc.y + 1, { width: cols.ctn - 4, align: "center" });
+  }
+  x += cols.ctn;
+
+  doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink).text(line.sku || "", x + 2, y + 2, { width: cols.item - 4, align: "center" });
+  x += cols.item;
+
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(colors.ink).text(line.description.toUpperCase(), x + 4, y, { width: cols.description - 8 });
+  let detailY = doc.y + 4;
+  doc.font("Helvetica").fontSize(6.8).fillColor(colors.ink);
+  for (const [leftText, rightText] of detailPairs(line)) {
+    doc.text(leftText, x + 4, detailY, { width: 128, lineBreak: false });
+    doc.text(rightText, x + 140, detailY, { width: cols.description - 144, lineBreak: false });
+    detailY += 9.5;
+  }
+  x += cols.description;
+
+  const quantity = Number(line.quantity || 0);
+  const perPiece = line.netWeightPerPieceKg !== null && line.netWeightPerPieceKg !== undefined && line.netWeightPerPieceKg !== ""
+    ? Number(line.netWeightPerPieceKg)
+    : quantity > 0 ? Number(line.netWeightKg || 0) / quantity : 0;
+  doc.font("Helvetica").fontSize(7.6).fillColor(colors.ink);
+  doc.text(formatQty(quantity), x, y + 4, { width: cols.qty, align: "center" });
+  x += cols.qty;
+  doc.text(formatWeight(perPiece), x, y + 4, { width: cols.perPiece, align: "center" });
+  x += cols.perPiece;
+  doc.text(formatWeight(line.netWeightKg), x, y + 4, { width: cols.total, align: "center" });
+}
+
+/** The small print under each description: pcs/carton, carton size, weight of one and of all cartons. */
+function detailPairs(line: PackingListPdfLine): [string, string][] {
+  const cartons = lineCartonCount(line);
+  const size = [line.lengthCm, line.widthCm, line.heightCm].every((part) => part !== null && part !== undefined && part !== "")
+    ? `CTN SIZE: ${formatQty(line.lengthCm)} X ${formatQty(line.widthCm)} X ${formatQty(line.heightCm)}`
+    : "";
+  const perCarton = line.grossWeightPerCartonKg !== null && line.grossWeightPerCartonKg !== undefined && line.grossWeightPerCartonKg !== ""
+    ? Number(line.grossWeightPerCartonKg)
+    : cartons > 0 && Number(line.grossWeightKg) > 0 ? Number(line.grossWeightKg) / cartons : 0;
+  const pieces = line.piecesPerCarton ? `${formatQty(line.piecesPerCarton)} ${line.unitCode || "PCS"}/CTN` : "";
+  const oneCarton = perCarton > 0 ? `1 CTN WEIGHT : ${formatWeight(perCarton)} KG` : "";
+  const allCartons = cartons > 1 && Number(line.grossWeightKg) > 0 ? `${cartons} CTN WEIGHT: ${formatWeight(line.grossWeightKg)} KG` : "";
+  const hsn = line.hsnSac ? `HSN: ${line.hsnSac}` : "";
+
+  const pairs: [string, string][] = [];
+  if (pieces || size) pairs.push([pieces, size]);
+  if (oneCarton || allCartons) pairs.push([oneCarton, allCartons]);
+  if (hsn) pairs.push([hsn, ""]);
+  return pairs;
+}
+
+function drawFooter(doc: PDFKit.PDFDocument, data: PackingListPdfData, top: number) {
+  const company = data.company;
+  // Totals box
+  const totalsHeight = 44;
+  box(doc, left, top, width, totalsHeight);
+  const volume = Number(data.totals.volumeCbm || 0);
+  doc.font("Helvetica").fontSize(8.5).fillColor(colors.ink);
+  doc.text(`TOTAL NO. OF CARTONS: `, left + 6, top + 6, { continued: true }).font("Helvetica-Bold").text(String(data.totals.packages));
+  doc.font("Helvetica").text(`TOTAL NET WEIGHT: `, left + 6, top + 18, { continued: true }).font("Helvetica-Bold").text(`${formatWeight(data.totals.netWeightKg)} KG`);
+  doc.font("Helvetica").text(`TOTAL GROSS WEIGHT: `, left + 6, top + 30, { continued: true }).font("Helvetica-Bold").text(`${formatWeight(data.totals.grossWeightKg)} KG`);
+  doc.font("Helvetica").text(`TOTAL QUANTITY: `, left + 280, top + 6, { continued: true }).font("Helvetica-Bold").text(`${formatQty(data.totals.quantity)} PCS`);
+  if (volume > 0) {
+    doc.font("Helvetica").text(`TOTAL VOLUME: `, left + 280, top + 18, { continued: true }).font("Helvetica-Bold").text(`${formatCbm(volume)} CBM`);
   }
 
-  const leftW = 335;
-  drawCell(doc, tableX, y, leftW, 92, "Notes / declaration", [
-    data.notes || "We certify that the particulars above are true and correct as per the shipment packing details."
-  ]);
-  drawCell(doc, tableX + leftW, y, tableWidth - leftW, 92, "Signature", [
-    `For, ${text(data.company, "legalName", "Company")}`,
-    "",
-    "",
-    text(data.company, "signatoryName"),
-    text(data.company, "signatoryDesignation", "Authorised Signatory")
-  ]);
-  drawSignatureImage(doc, tableX + leftW + 18, y + 38, tableWidth - leftW - 36, 24, data.signature);
-  doc.moveTo(tableX + leftW + 18, y + 64).lineTo(tableX + tableWidth - 18, y + 64).strokeColor(colors.border).stroke();
+  // Declaration | signature
+  const signTop = top + totalsHeight;
+  const signHeight = footerHeight - totalsHeight;
+  const half = 290;
+  box(doc, left, signTop, half, signHeight);
+  doc.font("Helvetica-Bold").fontSize(7).fillColor(colors.ink).text("Declaration:", left + 4, signTop + 5);
+  doc.font("Helvetica").fontSize(7).text(
+    data.notes || "We declare that this Invoice shows the actual prices of the goods described and that all particulars are true and correct.",
+    left + 4,
+    signTop + 18,
+    { width: half - 8, height: signHeight - 22, ellipsis: true }
+  );
+
+  box(doc, left + half, signTop, width - half, signHeight);
+  doc.font("Helvetica-Bold").fontSize(7).text("Signature & Date", left + half + 6, signTop + 5);
+  doc.fontSize(9).text(`For, ${text(company, "legalName", "Company")}.`, left + half + 6, signTop + 18, { width: width - half - 12 });
+  drawSignatureImage(doc, left + half + 6, signTop + 32, width - half - 12, 22, data.signature);
+  doc.fontSize(8.5).text(
+    text(company, "signatoryDesignation", "Authorised Signatory"),
+    left + half + 6,
+    signTop + signHeight - 14,
+    { width: width - half - 12, align: "right" }
+  );
 }
 
-function drawCell(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, title: string, rows: string[], headline = false) {
-  doc.rect(x, y, width, height).fillAndStroke("#ffffff", colors.border);
-  doc.rect(x, y, width, 16).fill(colors.soft);
-  doc.fillColor(colors.muted).font("Helvetica-Bold").fontSize(7).text(title.toUpperCase(), x + 5, y + 5, { width: width - 10 });
-  doc.fillColor(colors.ink).font(headline ? "Helvetica-Bold" : "Helvetica").fontSize(headline ? 8 : 7.5).text(rows.filter(Boolean).join("\n"), x + 5, y + 21, {
-    width: width - 8,
-    height: height - 24,
-    ellipsis: true
-  });
+function box(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number) {
+  doc.lineWidth(0.6).rect(x, y, w, h).stroke(colors.rule);
 }
 
-function drawPlainCell(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, value: string, align: "left" | "right" | "center") {
-  doc.rect(x, y, width, height).fillAndStroke("#ffffff", colors.border);
-  doc.fillColor(colors.ink).font("Helvetica").fontSize(7.3).text(value, x + 3, y + 7, {
-    width: width - 6,
-    height: height - 8,
-    align,
-    ellipsis: true
-  });
+function label(doc: PDFKit.PDFDocument, title: string, x: number, y: number) {
+  doc.font("Helvetica").fontSize(7).fillColor(colors.muted).text(title, x + 4, y + 3, { lineBreak: false });
+}
+
+function value(doc: PDFKit.PDFDocument, content: string, x: number, y: number, w: number) {
+  if (!content) return;
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(colors.ink).text(content, x + 4, y + 13, { width: w - 8, lineBreak: false, ellipsis: true });
+}
+
+function invoiceReference(data: PackingListPdfData): string {
+  if (!data.invoiceNumber) return "";
+  return `${data.invoiceNumber}${data.invoiceDate ? ` DT: ${formatDate(data.invoiceDate)}` : ""}`;
+}
+
+function partyName(record: JsonRecord | null): string {
+  return (text(record, "legalName") || text(record, "displayName") || "-").toUpperCase();
+}
+
+function drawLogo(doc: PDFKit.PDFDocument, x: number, y: number, logo: PackingListPdfData["logo"]) {
+  if (!logo || !canDrawImage(logo.mimeType)) return;
+  try {
+    doc.image(logo.data, x, y, { fit: [46, 46], align: "center", valign: "center" });
+  } catch {
+    // An unreadable logo is skipped; the exporter name is already printed.
+  }
+}
+
+function drawSignatureImage(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  signature: PackingListPdfData["signature"]
+) {
+  if (!signature || !canDrawImage(signature.mimeType)) return;
+  try {
+    doc.image(signature.data, x, y, { fit: [w, h], valign: "center" });
+  } catch {
+    // Keep the signature box if the uploaded image is not readable.
+  }
 }
 
 function addDraftWatermark(doc: PDFKit.PDFDocument) {
@@ -298,9 +432,9 @@ function addDraftWatermark(doc: PDFKit.PDFDocument) {
   for (let i = range.start; i < range.start + range.count; i += 1) {
     doc.switchToPage(i);
     doc.save();
-    doc.rotate(-35, { origin: [297, 421] });
+    doc.rotate(-35, { origin: [A4.width / 2, A4.height / 2] });
     doc.font("Helvetica-Bold").fontSize(96).fillColor("#c53030").fillOpacity(0.08);
-    doc.text("DRAFT", 297 - 260, 421 - 48, { width: 520, align: "center", lineBreak: false });
+    doc.text("DRAFT", A4.width / 2 - 260, A4.height / 2 - 48, { width: 520, align: "center", lineBreak: false });
     doc.restore();
   }
   doc.fillOpacity(1);
@@ -310,56 +444,13 @@ function addPageNumbers(doc: PDFKit.PDFDocument) {
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i += 1) {
     doc.switchToPage(i);
+    // Write inside the bottom margin without letting PDFKit start an extra page.
+    const bottomMargin = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
     doc.font("Helvetica").fontSize(7).fillColor(colors.muted);
-    const label = `Page ${i + 1} of ${range.count}`;
-    doc.text(label, page.margin + (tableWidth - doc.widthOfString(label)) / 2, 820, { lineBreak: false });
-  }
-}
-
-function drawBrandMark(
-  doc: PDFKit.PDFDocument,
-  x: number,
-  y: number,
-  name: string,
-  logo: PackingListPdfData["logo"]
-) {
-  if (logo && canDrawImage(logo.mimeType)) {
-    try {
-      doc.image(logo.data, x - 6, y - 2, { fit: [46, 42], align: "center", valign: "center" });
-      return;
-    } catch {
-      // Fall back to initials if an uploaded image cannot be decoded by PDFKit.
-    }
-  }
-
-  const initials = name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("") || "PL";
-  doc.roundedRect(x, y, 34, 34, 5).fill(colors.primaryLight);
-  doc.fillColor(colors.primary).font("Helvetica-Bold").fontSize(11).text(initials, x, y + 11, {
-    width: 34,
-    align: "center"
-  });
-  doc.fillColor(colors.ink);
-}
-
-function drawSignatureImage(
-  doc: PDFKit.PDFDocument,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  signature: PackingListPdfData["signature"]
-) {
-  if (!signature || !canDrawImage(signature.mimeType)) return;
-
-  try {
-    doc.image(signature.data, x, y, { fit: [width, height], valign: "center" });
-  } catch {
-    // Keep the signature line visible if the uploaded image is not readable.
+    const pageLabel = `Page ${i + 1} of ${range.count}`;
+    doc.text(pageLabel, left, 816, { width, align: "center", lineBreak: false });
+    doc.page.margins.bottom = bottomMargin;
   }
 }
 
@@ -368,37 +459,31 @@ function canDrawImage(mimeType: string): boolean {
 }
 
 function text(record: JsonRecord | null | undefined, key: string, fallback = ""): string {
-  const value = record?.[key];
-  return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
+  const raw = record?.[key];
+  return typeof raw === "string" || typeof raw === "number" ? String(raw) : fallback;
 }
 
-function ids(record: JsonRecord | null): string[] {
+function addressLines(record: JsonRecord | null): string[] {
+  const place = [text(record, "city"), text(record, "state")].filter(Boolean).join(", ");
   return [
-    text(record, "gstin") ? `GSTIN - ${text(record, "gstin")}` : "",
-    text(record, "pan") ? `PAN - ${text(record, "pan")}` : "",
-    text(record, "iec") ? `IEC - ${text(record, "iec")}` : ""
-  ].filter(Boolean);
-}
-
-function formatAddressLines(record: JsonRecord | null): string[] {
-  return [
-    text(record, "addressLine1"),
-    text(record, "addressLine2"),
-    [text(record, "city"), text(record, "state"), text(record, "postcode")].filter(Boolean).join(", "),
-    text(record, "country"),
-    text(record, "phone") ? `Mobile# ${text(record, "phone")}` : "",
-    text(record, "email")
-  ].filter(Boolean);
+    [text(record, "addressLine1"), text(record, "addressLine2")].filter(Boolean).join(", "),
+    [place, text(record, "postcode")].filter(Boolean).join(" - "),
+    text(record, "country")
+  ].filter(Boolean).map((line) => line.toUpperCase());
 }
 
 function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" }).format(date);
 }
 
-function formatQty(value: string | number): string {
-  return Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 4 });
+function formatQty(raw: Num): string {
+  return Number(raw || 0).toLocaleString("en-IN", { maximumFractionDigits: 4 });
 }
 
-function formatCbm(value: string | number): string {
-  return Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 3, maximumFractionDigits: 6 });
+function formatWeight(raw: Num): string {
+  return Number(raw || 0).toFixed(3);
+}
+
+function formatCbm(raw: Num): string {
+  return Number(raw || 0).toFixed(3);
 }

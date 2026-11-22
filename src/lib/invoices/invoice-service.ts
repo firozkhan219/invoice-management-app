@@ -1,4 +1,4 @@
-import { Prisma, type InvoiceStatus } from "@prisma/client";
+import { Prisma, type InvoiceDocumentType, type InvoiceStatus } from "@prisma/client";
 import { lockInvoiceRow, prisma } from "@/lib/db/prisma";
 import { calculateInvoiceTotals, resolveTaxMode } from "@/lib/invoices/calculation";
 import { canDeleteDraftInvoiceStatus, draftIssueRequirements } from "@/lib/invoices/lifecycle";
@@ -23,6 +23,8 @@ import type {
 export type InvoiceListFilters = {
   q?: string;
   status?: string;
+  /** "tax_invoice" or "proforma"; anything else lists both. */
+  type?: string;
   currency?: string;
   dateFrom?: string;
   dateTo?: string;
@@ -48,6 +50,7 @@ type InvoiceSnapshotSource = {
 };
 
 type InvoicePdfSource = InvoiceSnapshotSource & {
+  documentType?: string;
   invoiceNumber: string | null;
   invoiceDate: Date;
   dueDate: Date | null;
@@ -88,6 +91,7 @@ function startOfTodayUtc(now = new Date()) {
 export function overdueInvoiceWhere(now = new Date()): Prisma.InvoiceWhereInput {
   return {
     status: { in: ["issued", "partially_paid"] },
+    documentType: "tax_invoice",
     dueDate: { lt: startOfTodayUtc(now) },
     balanceDue: { gt: new Prisma.Decimal(0) }
   };
@@ -110,6 +114,7 @@ export async function listInvoices(context: TenantContext, filters: InvoiceListF
     organisationId: tenant.organisationId,
     ...(filters.status && INVOICE_STATUSES.includes(filters.status as InvoiceStatus) ? { status: filters.status as InvoiceStatus } : {}),
     ...(filters.status === "overdue" ? overdueInvoiceWhere() : {}),
+    ...(filters.type === "tax_invoice" || filters.type === "proforma" ? { documentType: filters.type } : {}),
     ...(filters.currency ? { currency: filters.currency.toUpperCase() } : {}),
     ...(validDate(filters.dateFrom) || validDate(filters.dateTo) ? {
       invoiceDate: {
@@ -158,7 +163,9 @@ export async function getInvoice(context: TenantContext, invoiceId: string) {
       packingLists: {
         include: { lines: { orderBy: { sortOrder: "asc" } } },
         orderBy: [{ packingListDate: "desc" }, { createdAt: "desc" }]
-      }
+      },
+      sourceProforma: { select: { id: true, invoiceNumber: true } },
+      convertedInvoices: { select: { id: true, invoiceNumber: true, status: true }, orderBy: { createdAt: "desc" } }
     }
   });
 }
@@ -242,6 +249,8 @@ type ClearableDraftField = typeof CLEARABLE_DRAFT_FIELDS[number];
 function draftData(input: InvoiceDraftInput, clear: readonly string[] = []) {
   const fields: Record<string, unknown> = { ...input };
   delete fields.version;
+  // The document type is fixed when the draft is created; editing never turns one kind into the other.
+  delete fields.documentType;
   for (const key of clear) {
     if ((CLEARABLE_DRAFT_FIELDS as readonly string[]).includes(key)) fields[key] = null;
   }
@@ -260,6 +269,7 @@ export async function createInvoiceDraft(context: TenantContext, input: InvoiceD
     const created = await tx.invoice.create({
       data: {
         ...draftData(input),
+        documentType: input.documentType ?? "tax_invoice",
         organisationId: tenant.organisationId,
         createdById: tenant.userId,
         paidTotal: new Prisma.Decimal(0),
@@ -285,77 +295,15 @@ export async function createInvoiceDraft(context: TenantContext, input: InvoiceD
 /**
  * Copies an invoice (any status) into a new draft dated today. Parties, shipping details, notes and
  * lines are copied; number, payments, credits and issue snapshots are not. The due date keeps the
- * same payment term length.
+ * same payment term length. A copied proforma stays a proforma.
  */
 export async function duplicateInvoice(context: TenantContext, invoiceId: string) {
   const tenant = requireTenantContext(context);
   assertPermission(tenant.role, "invoices:create");
 
   return prisma.$transaction(async (tx) => {
-    const source = await tx.invoice.findFirst({
-      where: { id: invoiceId, organisationId: tenant.organisationId },
-      include: { items: { orderBy: { sortOrder: "asc" } } }
-    });
-    if (!source) throw new Error("Invoice not found.");
-
-    const now = new Date();
-    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-    const termDays = source.dueDate
-      ? Math.max(0, Math.round((source.dueDate.getTime() - source.invoiceDate.getTime()) / 86_400_000))
-      : null;
-
-    const created = await tx.invoice.create({
-      data: {
-        organisationId: tenant.organisationId,
-        companyId: source.companyId,
-        buyerId: source.buyerId,
-        consigneeBuyerId: source.consigneeBuyerId,
-        billingAddressId: source.billingAddressId,
-        shippingAddressId: source.shippingAddressId,
-        bankAccountId: source.bankAccountId,
-        invoiceDate: today,
-        dueDate: termDays === null ? null : new Date(today.getTime() + termDays * 86_400_000),
-        currency: source.currency,
-        placeOfSupplyStateCode: source.placeOfSupplyStateCode,
-        taxMode: source.taxMode,
-        exporterReference: source.exporterReference,
-        preCarriageBy: source.preCarriageBy,
-        placeOfReceipt: source.placeOfReceipt,
-        vesselFlightNo: source.vesselFlightNo,
-        portOfLoading: source.portOfLoading,
-        portOfDischarge: source.portOfDischarge,
-        finalDestination: source.finalDestination,
-        termsOfDelivery: source.termsOfDelivery,
-        notes: source.notes,
-        declaration: source.declaration,
-        invoiceDiscount: source.invoiceDiscount,
-        otherCharges: source.otherCharges,
-        createdById: tenant.userId,
-        paidTotal: new Prisma.Decimal(0),
-        balanceDue: new Prisma.Decimal(0)
-      }
-    });
-
-    if (source.items.length > 0) {
-      await tx.invoiceItem.createMany({
-        data: source.items.map((item) => ({
-          organisationId: tenant.organisationId,
-          invoiceId: created.id,
-          itemId: item.itemId,
-          sortOrder: item.sortOrder,
-          sku: item.sku,
-          description: item.description,
-          hsnSac: item.hsnSac,
-          quantity: item.quantity,
-          unitCode: item.unitCode,
-          rate: item.rate,
-          discountAmount: item.discountAmount,
-          gstRate: item.gstRate
-        }))
-      });
-    }
-
-    const invoice = await recalculateDraft(tx, created.id, tenant.userId, { bumpVersion: false });
+    const source = await loadCopySource(tx, tenant.organisationId, invoiceId);
+    const invoice = await copyInvoiceToDraft(tx, tenant, source, { documentType: source.documentType });
 
     await tx.auditLog.create({
       data: {
@@ -370,6 +318,127 @@ export async function duplicateInvoice(context: TenantContext, invoiceId: string
 
     return invoice;
   });
+}
+
+/**
+ * Turns an issued proforma into a tax invoice draft with the same buyer, lines, prices and shipping
+ * details, linked back to the proforma. The proforma itself is kept unchanged for the record.
+ */
+export async function convertProformaToInvoice(context: TenantContext, proformaId: string) {
+  const tenant = requireTenantContext(context);
+  assertPermission(tenant.role, "invoices:create");
+
+  return prisma.$transaction(async (tx) => {
+    const source = await loadCopySource(tx, tenant.organisationId, proformaId);
+    if (source.documentType !== "proforma") throw new Error("Only a proforma invoice can be converted.");
+    if (source.status !== "issued") throw new Error("Issue the proforma first, then convert it to a tax invoice.");
+
+    const existing = await tx.invoice.findFirst({
+      where: { organisationId: tenant.organisationId, sourceProformaId: source.id, status: { not: "cancelled" } },
+      select: { id: true, invoiceNumber: true }
+    });
+    if (existing) {
+      throw new Error(`This proforma is already converted${existing.invoiceNumber ? ` to ${existing.invoiceNumber}` : " to a draft tax invoice"}.`);
+    }
+
+    const invoice = await copyInvoiceToDraft(tx, tenant, source, {
+      documentType: "tax_invoice",
+      sourceProformaId: source.id,
+      keepBuyerOrder: true
+    });
+
+    await tx.auditLog.create({
+      data: {
+        organisationId: tenant.organisationId,
+        actorUserId: tenant.userId,
+        action: "invoice_draft.from_proforma",
+        entityType: "invoice",
+        entityId: invoice.id,
+        metadata: { proformaId: source.id, proformaNumber: source.invoiceNumber }
+      }
+    });
+
+    return invoice;
+  });
+}
+
+async function loadCopySource(tx: Prisma.TransactionClient, organisationId: string, invoiceId: string) {
+  const source = await tx.invoice.findFirst({
+    where: { id: invoiceId, organisationId },
+    include: { items: { orderBy: { sortOrder: "asc" } } }
+  });
+  if (!source) throw new Error("Invoice not found.");
+  return source;
+}
+
+async function copyInvoiceToDraft(
+  tx: Prisma.TransactionClient,
+  tenant: TenantContext,
+  source: Awaited<ReturnType<typeof loadCopySource>>,
+  options: { documentType: InvoiceDocumentType; sourceProformaId?: string; keepBuyerOrder?: boolean }
+) {
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const termDays = source.dueDate
+    ? Math.max(0, Math.round((source.dueDate.getTime() - source.invoiceDate.getTime()) / 86_400_000))
+    : null;
+
+  const created = await tx.invoice.create({
+    data: {
+      organisationId: tenant.organisationId,
+      documentType: options.documentType,
+      sourceProformaId: options.sourceProformaId ?? null,
+      companyId: source.companyId,
+      buyerId: source.buyerId,
+      consigneeBuyerId: source.consigneeBuyerId,
+      billingAddressId: source.billingAddressId,
+      shippingAddressId: source.shippingAddressId,
+      bankAccountId: source.bankAccountId,
+      invoiceDate: today,
+      dueDate: termDays === null ? null : new Date(today.getTime() + termDays * 86_400_000),
+      currency: source.currency,
+      placeOfSupplyStateCode: source.placeOfSupplyStateCode,
+      taxMode: source.taxMode,
+      buyerOrderNumber: options.keepBuyerOrder ? source.buyerOrderNumber : null,
+      buyerOrderDate: options.keepBuyerOrder ? source.buyerOrderDate : null,
+      exporterReference: source.exporterReference,
+      preCarriageBy: source.preCarriageBy,
+      placeOfReceipt: source.placeOfReceipt,
+      vesselFlightNo: source.vesselFlightNo,
+      portOfLoading: source.portOfLoading,
+      portOfDischarge: source.portOfDischarge,
+      finalDestination: source.finalDestination,
+      termsOfDelivery: source.termsOfDelivery,
+      notes: source.notes,
+      declaration: source.declaration,
+      invoiceDiscount: source.invoiceDiscount,
+      otherCharges: source.otherCharges,
+      createdById: tenant.userId,
+      paidTotal: new Prisma.Decimal(0),
+      balanceDue: new Prisma.Decimal(0)
+    }
+  });
+
+  if (source.items.length > 0) {
+    await tx.invoiceItem.createMany({
+      data: source.items.map((item) => ({
+        organisationId: tenant.organisationId,
+        invoiceId: created.id,
+        itemId: item.itemId,
+        sortOrder: item.sortOrder,
+        sku: item.sku,
+        description: item.description,
+        hsnSac: item.hsnSac,
+        quantity: item.quantity,
+        unitCode: item.unitCode,
+        rate: item.rate,
+        discountAmount: item.discountAmount,
+        gstRate: item.gstRate
+      }))
+    });
+  }
+
+  return recalculateDraft(tx, created.id, tenant.userId, { bumpVersion: false });
 }
 
 export async function updateInvoiceDraft(
@@ -731,7 +800,9 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
       if (!draft) throw new Error("Invoice not found.");
       if (draft.status !== "draft") throw new Error("Only draft invoices can be issued.");
       if (draft.version !== input.expectedVersion) throw new Error("Invoice was changed elsewhere. Refresh and try again.");
-      await assertDateNotLocked(tx, tenant.organisationId, draft.invoiceDate, "issue this invoice");
+      const isProforma = draft.documentType === "proforma";
+      // A proforma is a quotation, not a books-of-account document, so closed periods do not apply.
+      if (!isProforma) await assertDateNotLocked(tx, tenant.organisationId, draft.invoiceDate, "issue this invoice");
 
       if (draft.taxMode === "automatic") {
         if (!draft.company?.stateCode) {
@@ -797,6 +868,31 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
         }
         invoiceNumber = manualNumber;
         sequenceNumber = null;
+      } else if (isProforma) {
+        // Proformas run their own PI/<FY>/0001 sequence and never use tax invoice series numbers.
+        const financialYear = financialYearLabel(invoice.invoiceDate, organisation.financialYearStart);
+        const prefix = `PI/${financialYear}/`;
+        if (manualNumber) {
+          if (!(await numberIsFree(manualNumber))) {
+            throw new Error(`Number ${manualNumber} is already used. Choose another number.`);
+          }
+          invoiceNumber = manualNumber;
+          sequenceNumber = null;
+        } else {
+          const used = await tx.invoice.aggregate({
+            where: { organisationId: tenant.organisationId, documentType: "proforma", invoiceNumber: { startsWith: prefix } },
+            _max: { sequenceNumber: true }
+          });
+          let next = (used._max.sequenceNumber ?? 0) + 1;
+          let candidate = `${prefix}${String(next).padStart(4, "0")}`;
+          for (let attempt = 0; attempt < 100 && !(await numberIsFree(candidate)); attempt += 1) {
+            next += 1;
+            candidate = `${prefix}${String(next).padStart(4, "0")}`;
+          }
+          invoiceNumber = candidate;
+          sequenceNumber = next;
+        }
+        seriesId = null;
       } else {
         if (!input.seriesId) throw new Error("Choose an invoice number series.");
         const series = await tx.invoiceNumberSeries.findFirst({
@@ -877,7 +973,8 @@ export async function issueInvoice(context: TenantContext, input: IssueInvoiceIn
           documentSnapshot: snapshot.document,
           paidTotal: new Prisma.Decimal(0),
           creditedTotal: new Prisma.Decimal(0),
-          balanceDue: invoice.grandTotal,
+          // Nothing is owed on a proforma; the receivable starts when it becomes a tax invoice.
+          balanceDue: isProforma ? new Prisma.Decimal(0) : invoice.grandTotal,
           issuedById: tenant.userId,
           issuedAt: new Date(),
           updatedById: tenant.userId,
@@ -1190,6 +1287,7 @@ function buildInvoicePdfData(invoice: InvoicePdfSource, options: { live?: boolea
   const calculation = snapshot(invoice.calculationSnapshot);
 
   return {
+    ...(invoice.documentType === "proforma" ? { documentTitle: "Proforma Invoice" } : {}),
     invoiceNumber: invoice.invoiceNumber || "invoice",
     invoiceDate: invoice.invoiceDate,
     dueDate: invoice.dueDate,

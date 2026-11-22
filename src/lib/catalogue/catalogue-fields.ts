@@ -17,7 +17,7 @@ export type CatalogueFieldKey = typeof CATALOGUE_FIELDS[number]["key"];
 
 export const CATALOGUE_LAYOUTS = [
   { value: 1, label: "1 photo per page", hint: "Large photo, best for hero products" },
-  { value: 2, label: "2 photos per page", hint: "Balanced photo and details" },
+  { value: 2, label: "2 photos per page", hint: "Large photos, details underneath" },
   { value: 4, label: "4 photos per page", hint: "Compact range overview" }
 ] as const;
 
