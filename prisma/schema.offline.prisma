@@ -15,6 +15,13 @@ model User {
   name            String?
   passwordHash    String   @map("password_hash")
   emailVerifiedAt DateTime? @map("email_verified_at")
+  /// AES-GCM encrypted TOTP secret; set during setup, active once totpEnabledAt is set.
+  totpSecret      Json?    @map("totp_secret")
+  totpEnabledAt   DateTime? @map("totp_enabled_at")
+  /// Last accepted 30-second step, so a code cannot be replayed.
+  totpLastStep    Int?     @map("totp_last_step")
+  /// SHA-256 hashes of unused one-time recovery codes.
+  totpRecoveryCodes Json?  @map("totp_recovery_codes")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

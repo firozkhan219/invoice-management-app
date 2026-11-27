@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AlertTriangle, ArrowLeft, ArrowRightLeft, Ban, CheckCircle2, Copy, CreditCard, Eye, FileClock, FileText, PackageCheck, Pencil, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { OwnerDeletePanel } from "@/components/owner-delete-panel";
+import { getTwoFactorStatus } from "@/lib/auth/two-factor-service";
 import { getCurrentUser } from "@/lib/auth/session";
 import { daysOverdue, getInvoice, getInvoiceEditorData, getInvoiceIssueOptions } from "@/lib/invoices/invoice-service";
 import { draftIssueRequirements } from "@/lib/invoices/lifecycle";
@@ -26,6 +28,8 @@ export default async function InvoiceEditorPage({
   const { id } = await params;
   const invoice = await getInvoice(context, id);
   if (!invoice) redirect("/invoices");
+  const mayPurge = hasPermission(context.role, "data:purge");
+  const twoFactorOn = mayPurge ? (await getTwoFactorStatus(user.id)).enabled : false;
   const query = await searchParams;
   const mayCreate = hasPermission(context.role, "invoices:create");
   const mayIssue = hasPermission(context.role, "invoices:issue");
@@ -636,6 +640,15 @@ export default async function InvoiceEditorPage({
           ) : null}
         </aside>
       </div>
+      {mayPurge ? (
+        <OwnerDeletePanel
+          entity="invoice"
+          id={invoice.id}
+          label={invoice.invoiceNumber || (isProforma ? "this draft proforma" : "this draft invoice")}
+          twoFactorOn={twoFactorOn}
+          consequences="Its lines, revision history, credit notes and the payments recorded against it are deleted too; linked packing lists stay but lose the link."
+        />
+      ) : null}
     </AppShell>
   );
 }

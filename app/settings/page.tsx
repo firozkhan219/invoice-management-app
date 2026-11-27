@@ -4,13 +4,17 @@ import { AppShell } from "@/components/app-shell";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { getSettingsWorkspace } from "@/lib/settings/settings-service";
+import { listResetBackups } from "@/lib/admin/purge-service";
+import { getTwoFactorStatus } from "@/lib/auth/two-factor-service";
+import { hasPermission } from "@/lib/permissions/roles";
 import { renderInvoiceNumber, resetKeyForRule } from "@/lib/settings/number-series";
 
 const settingsTabs = [
   { id: "general", label: "General" },
   { id: "invoice-numbering", label: "Invoice numbering" },
   { id: "credit-note-numbering", label: "Credit note numbering" },
-  { id: "locked-periods", label: "Locked periods" }
+  { id: "locked-periods", label: "Locked periods" },
+  { id: "danger-zone", label: "Danger zone" }
 ] as const;
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -29,7 +33,12 @@ export default async function SettingsPage({
   if (!context) redirect("/login?error=" + encodeURIComponent("Your account has no active organisation."));
 
   const query = (await searchParams) ?? {};
-  const activeTab = settingsTabs.some((tab) => tab.id === query.tab) ? (query.tab as SettingsTabId) : "general";
+  // The danger zone (reset data) is for the owner only.
+  const isOwner = hasPermission(context.role, "data:purge");
+  const visibleTabs = settingsTabs.filter((tab) => tab.id !== "danger-zone" || isOwner);
+  const activeTab = visibleTabs.some((tab) => tab.id === query.tab) ? (query.tab as SettingsTabId) : "general";
+  const twoFactorOn = isOwner && activeTab === "danger-zone" ? (await getTwoFactorStatus(user.id)).enabled : false;
+  const backups = isOwner && activeTab === "danger-zone" ? await listResetBackups(context) : [];
   const { organisation, settings, companies, bankAccounts, lockedPeriods, series, creditNoteSeries } =
     await getSettingsWorkspace(context);
   const previewDate = new Date();
@@ -43,7 +52,7 @@ export default async function SettingsPage({
         </div>
       </header>
       <nav className="tabs" aria-label="Settings sections">
-        {settingsTabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <Link key={tab.id} href={`/settings?tab=${tab.id}`} aria-current={activeTab === tab.id ? "page" : undefined}>
             {tab.label}
           </Link>
@@ -394,6 +403,74 @@ export default async function SettingsPage({
                   <button className="button" type="submit">Lock period</button>
                 </form>
               </section>
+          </aside>
+        </div>
+      ) : null}
+      {activeTab === "danger-zone" && isOwner ? (
+        <div className="grid two-column">
+          <section className="panel danger-zone">
+            <div className="section-title">
+              <div>
+                <p className="muted">Owner only</p>
+                <h2>Reset data and start fresh</h2>
+              </div>
+            </div>
+            <p>
+              Erases <strong>every invoice, proforma, credit note, packing list and payment</strong>, and restarts every number
+              series at its starting number, so the next invoice is number 1 again. Your companies, bank accounts, settings, users
+              and the audit log are kept. A backup file of everything erased is saved first and listed on the right.
+            </p>
+            {!twoFactorOn ? (
+              <p className="notice error">
+                Turn on two-factor authentication under <Link href="/account#two-factor">My account</Link> first. Resetting needs your
+                password and a two-factor code.
+              </p>
+            ) : (
+              <form className="form" action="/api/admin/reset" method="post">
+                <div className="checkbox-list">
+                  <label className="checkbox"><input type="checkbox" checked disabled readOnly /> Invoices, proformas, credit notes, packing lists and payments (always)</label>
+                  <label className="checkbox"><input type="checkbox" name="products" value="yes" defaultChecked /> Also erase all products and their photos</label>
+                  <label className="checkbox"><input type="checkbox" name="buyers" value="yes" /> Also erase all buyers and their addresses</label>
+                </div>
+                <div className="field">
+                  <label htmlFor="confirmName">Type the business name to confirm: <strong>{organisation.name}</strong></label>
+                  <input id="confirmName" name="confirmName" required autoComplete="off" />
+                </div>
+                <div className="form-grid">
+                  <div className="field"><label htmlFor="resetPassword">Your password</label><input id="resetPassword" name="password" type="password" required autoComplete="current-password" /></div>
+                  <div className="field"><label htmlFor="resetCode">Authenticator code</label><input id="resetCode" name="code" required inputMode="numeric" autoComplete="one-time-code" maxLength={20} /></div>
+                </div>
+                <button className="button danger" type="submit">Erase data and reset numbering</button>
+              </form>
+            )}
+          </section>
+          <aside className="panel">
+            <div className="section-title">
+              <div>
+                <p className="muted">Safety</p>
+                <h2>Backups from earlier resets</h2>
+              </div>
+            </div>
+            {backups.length === 0 ? (
+              <div className="empty-state">No resets yet.</div>
+            ) : (
+              <div className="table-wrap">
+                <table className="table compact">
+                  <thead><tr><th>Date</th><th>By</th><th>Erased</th><th /></tr></thead>
+                  <tbody>
+                    {backups.map((backup) => (
+                      <tr key={backup.id}>
+                        <td>{backup.createdAt.toISOString().slice(0, 16).replace("T", " ")}</td>
+                        <td>{backup.by}</td>
+                        <td>{backup.counts.invoices ?? 0} invoices{backup.counts.products !== undefined ? `, ${backup.counts.products} products` : ""}</td>
+                        <td>{backup.hasFile ? <a href={`/api/admin/backups/${backup.id}`}>Download</a> : "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="muted top-space">Keep the downloaded file somewhere safe. It holds the erased records as JSON.</p>
           </aside>
         </div>
       ) : null}

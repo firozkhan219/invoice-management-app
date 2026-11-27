@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { createSession } from "@/lib/auth/session";
+import { startLoginChallenge, twoFactorEnabled } from "@/lib/auth/two-factor-service";
 import { hashPassword, verifyPassword } from "@/lib/security/passwords";
 import type { LoginInput, RegisterInput } from "@/lib/validation/auth";
 import { slugifyOrganisationName } from "@/lib/organisations/slug";
@@ -87,6 +88,12 @@ export async function loginUser(input: LoginInput) {
     throw new Error("Invalid email or password.");
   }
 
+  // With two-factor on, the password only opens the code step; the session starts after the code.
+  if (twoFactorEnabled(user)) {
+    await startLoginChallenge(user);
+    return { user, twoFactor: true as const };
+  }
+
   await createSession(user.id);
-  return user;
+  return { user, twoFactor: false as const };
 }

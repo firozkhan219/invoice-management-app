@@ -10,6 +10,10 @@ const allowedOrigins = [
 const rules = [
   { prefix: "/api/auth/login", limit: 10, windowMs: 60_000 },
   { prefix: "/api/auth/register", limit: 5, windowMs: 60_000 },
+  // Second-factor codes and dangerous owner actions get tight limits against guessing.
+  { prefix: "/api/auth/2fa", limit: 6, windowMs: 60_000 },
+  { prefix: "/api/account/2fa", limit: 10, windowMs: 60_000 },
+  { prefix: "/api/admin/", limit: 10, windowMs: 60_000 },
   { prefix: "/api/invoices/", suffix: "/pdf", limit: 30, windowMs: 60_000 },
   { prefix: "/api/reports/", limit: 20, windowMs: 60_000 },
   { prefix: "/api/", limit: 120, windowMs: 60_000 }

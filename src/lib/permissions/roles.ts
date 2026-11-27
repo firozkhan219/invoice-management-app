@@ -15,7 +15,9 @@ export type Permission =
   | "payments:read"
   | "payments:manage"
   | "reports:read"
-  | "documents:download";
+  | "documents:download"
+  /** Owner only: permanently delete issued documents and reset the workspace data. */
+  | "data:purge";
 
 const rolePermissions: Record<MemberRole, ReadonlySet<Permission>> = {
   owner: new Set([
@@ -33,7 +35,8 @@ const rolePermissions: Record<MemberRole, ReadonlySet<Permission>> = {
     "payments:read",
     "payments:manage",
     "reports:read",
-    "documents:download"
+    "documents:download",
+    "data:purge"
   ]),
   admin: new Set([
     "organisation:read",
