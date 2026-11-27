@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AlertTriangle, ArrowLeft, Ban, CheckCircle2, Download, Eye, PackagePlus, PencilLine, Save, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { OwnerDeletePanel } from "@/components/owner-delete-panel";
+import { getTwoFactorStatus } from "@/lib/auth/two-factor-service";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
 import { hasPermission } from "@/lib/permissions/roles";
@@ -26,6 +28,8 @@ export default async function PackingListDetailPage({
   ]);
 
   if (!packingList) notFound();
+  const mayPurge = hasPermission(context.role, "data:purge");
+  const twoFactorOn = mayPurge ? (await getTwoFactorStatus(user.id)).enabled : false;
 
   const canEdit = packingList.status === "draft";
   const nextCartonFrom = Math.max(0, ...packingList.lines.map((line) => line.cartonTo ?? line.cartonFrom ?? 0)) + 1;
@@ -303,6 +307,15 @@ export default async function PackingListDetailPage({
           </section>
         </main>
       </div>
+      {mayPurge ? (
+        <OwnerDeletePanel
+          entity="packing_list"
+          id={packingList.id}
+          label={packingList.packingListNumber || "this draft packing list"}
+          twoFactorOn={twoFactorOn}
+          consequences="All its carton lines are deleted too."
+        />
+      ) : null}
     </AppShell>
   );
 }

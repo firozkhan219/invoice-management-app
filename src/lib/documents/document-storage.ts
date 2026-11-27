@@ -51,3 +51,20 @@ export async function readPrivateDocument(storageKey: string): Promise<Buffer> {
 
   return readFile(absolutePath);
 }
+
+/** Removes a stored file. Missing files are ignored (the record may outlive the file). */
+export async function deletePrivateDocument(storageKey: string): Promise<void> {
+  const { unlink } = await import("fs/promises");
+  const uploadRoot = path.resolve(/*turbopackIgnore: true*/ process.cwd(), env.UPLOAD_DIR);
+  const absolutePath = path.resolve(/*turbopackIgnore: true*/ process.cwd(), env.UPLOAD_DIR, storageKey);
+
+  if (!absolutePath.startsWith(uploadRoot + path.sep)) {
+    throw new Error("Invalid document storage path.");
+  }
+
+  try {
+    await unlink(absolutePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}

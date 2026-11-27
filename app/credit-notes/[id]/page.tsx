@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Ban, FileText, Save, Send, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { OwnerDeletePanel } from "@/components/owner-delete-panel";
+import { getTwoFactorStatus } from "@/lib/auth/two-factor-service";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getCreditNote, getCreditNoteWorkspace } from "@/lib/credit-notes/credit-note-service";
 import { getTenantContextForUser } from "@/lib/organisations/membership";
@@ -23,6 +25,8 @@ export default async function CreditNoteDetailPage({
   const { id } = await params;
   const creditNote = await getCreditNote(context, id);
   if (!creditNote) redirect("/credit-notes");
+  const mayPurge = hasPermission(context.role, "data:purge");
+  const twoFactorOn = mayPurge ? (await getTwoFactorStatus(user.id)).enabled : false;
   await searchParams;
   // Viewers can open credit notes; only roles that can create see the draft editing forms.
   const isDraft = creditNote.status === "draft" && hasPermission(context.role, "invoices:create");
@@ -266,6 +270,15 @@ export default async function CreditNoteDetailPage({
           ) : null}
         </aside>
       </div>
+      {mayPurge ? (
+        <OwnerDeletePanel
+          entity="credit_note"
+          id={creditNote.id}
+          label={creditNote.creditNoteNumber || "this draft credit note"}
+          twoFactorOn={twoFactorOn}
+          consequences="If it is issued, its amount goes back onto the invoice balance first."
+        />
+      ) : null}
     </AppShell>
   );
 }

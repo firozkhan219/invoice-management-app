@@ -11,7 +11,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    await loginUser(parsed.data);
+    const result = await loginUser(parsed.data);
+    if (result.twoFactor) return Response.json({ ok: true, twoFactor: true });
   } catch (error) {
     const invalid = error instanceof Error && error.message === "Invalid email or password.";
     if (!invalid) console.error(error);
