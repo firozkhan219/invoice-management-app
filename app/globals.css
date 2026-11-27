@@ -2712,3 +2712,21 @@ aside .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .floating-panel .upload-zone input[type="file"] { max-width: 100%; }
 .toolbar-menu .menu-card { min-width: 230px; }
 .item-editor-panel .item-editor-top { padding-right: 52px; }
+
+/* ---------- Full-width pages ----------
+   Pages used to put a list and a form side by side (.two-column). Every section now takes the
+   full page width and they stack; forms lay their fields out in rows to use the width. */
+.two-column,
+.two-column.wide-left,
+.two-column.document-layout { grid-template-columns: minmax(0, 1fr); }
+.two-column > aside.grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 20px; }
+.two-column .panel > .form,
+.two-column .panel > form.form {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  align-items: end;
+  column-gap: 16px;
+}
+.two-column .panel > .form > :not(.field),
+.two-column .panel > .form > .field:has(textarea) { grid-column: 1 / -1; }
+.two-column .panel > .form > .button,
+.two-column .panel > .form > button { justify-self: start; }
