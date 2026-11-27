@@ -1,13 +1,12 @@
 import { redirect } from "next/navigation";
 import {
   Box,
-  Calculator,
+  BookOpen,
   ChevronDown,
   Copy,
   Download,
   Eye,
   FileSpreadsheet,
-  Grid2X2,
   ImagePlus,
   Layers3,
   List,
@@ -22,6 +21,7 @@ import {
   Wrench
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { PopoverDetails } from "@/components/popover-details";
 import { BULK_ITEMS_FORM_ID, DeleteItemButton, DeleteSelectedButton, SelectAllItemsCheckbox } from "@/components/items/item-selection";
 import { ProductImageUploader } from "@/components/items/product-image-uploader";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -36,7 +36,7 @@ type TaxRateForForm = ItemMasterData["taxRates"][number];
 export default async function ItemsPage({
   searchParams
 }: {
-  searchParams?: Promise<{ q?: string; category?: string; status?: string; sort?: string; error?: string; notice?: string }>;
+  searchParams?: Promise<{ q?: string; category?: string; status?: string; sort?: string; image?: string; error?: string; notice?: string }>;
 }) {
   const user = await getCurrentUser();
 
@@ -54,7 +54,7 @@ export default async function ItemsPage({
   const { units, taxRates, items, categories, subcategories } = await listItemMasters(context, filters);
   const query = new URLSearchParams();
   Object.entries(filters || {}).forEach(([key, value]) => {
-    if (value) query.set(key, value);
+    if (value && key !== "error" && key !== "notice") query.set(key, value);
   });
 
   const exportHref = `/api/items/export${query.size ? `?${query.toString()}` : ""}`;
@@ -78,30 +78,20 @@ export default async function ItemsPage({
               <p className="muted">Images, item codes, categories, prices, weights, barcodes, and export document readiness.</p>
             </div>
             <div className="item-toolbar">
-              <details className="toolbar-popover">
-                <summary className="button subtle"><FileSpreadsheet size={16} /> Import Excel</summary>
+              <PopoverDetails className="toolbar-popover" summaryClassName="button subtle" panelClassName="floating-panel import-panel" summary={<><FileSpreadsheet size={16} /> Import Excel</>}>
                 <ImportPanel />
-              </details>
-              <details className="toolbar-popover">
-                <summary className="button subtle"><ImagePlus size={16} /> Bulk Images</summary>
+              </PopoverDetails>
+              <PopoverDetails className="toolbar-popover" summaryClassName="button subtle" panelClassName="floating-panel image-panel" summary={<><ImagePlus size={16} /> Bulk Images</>}>
                 <BulkImagePanel />
-              </details>
-              <details className="toolbar-popover">
-                <summary className="button subtle"><Wrench size={16} /> Fix Images</summary>
-                <ToolPanel title="Image Repair Queue" icon={<Wrench size={26} />} description="Review items missing images, duplicated image references, or filenames that do not match item codes." />
-              </details>
-              <details className="toolbar-popover">
-                <summary className="button subtle"><Calculator size={16} /> Order Qty Analyzer</summary>
-                <ToolPanel title="Order Quantity Analyzer" icon={<Calculator size={26} />} description="Reserved for comparing invoice quantities against cartons, units, and package dimensions." />
-              </details>
+              </PopoverDetails>
+              <PopoverDetails className="toolbar-popover" summaryClassName="button subtle" panelClassName="floating-panel compact-floating" summary={<><Wrench size={16} /> Fix Images</>}>
+                <FixImagesPanel missing={pendingImageCount} filtered={filters?.image === "missing"} />
+              </PopoverDetails>
               <DeleteSelectedButton />
-              <details className="toolbar-menu">
-                <summary className="button subtle"><Download size={16} /> Export</summary>
-                <div className="menu-card">
-                  <a href={exportHref}><FileSpreadsheet size={15} /> Export Excel</a>
-                  <a href={exportHref}><Download size={15} /> Export PDF</a>
-                </div>
-              </details>
+              <PopoverDetails className="toolbar-menu" summaryClassName="button subtle" panelClassName="menu-card" showClose={false} summary={<><Download size={16} /> Export</>}>
+                <a href={exportHref} data-popover-close=""><FileSpreadsheet size={15} /> Export Excel (CSV)</a>
+                <a href="/catalogue" data-popover-close=""><BookOpen size={15} /> Catalogue PDF with photos</a>
+              </PopoverDetails>
               <a className="button" href="#add-item"><Plus size={16} /> Add Item</a>
             </div>
           </header>
@@ -137,14 +127,14 @@ export default async function ItemsPage({
                     <option value="inactive">Inactive</option>
                   </select>
                 </label>
+                {filters?.image === "missing" ? <input type="hidden" name="image" value="missing" /> : null}
                 <button className="button subtle tiny" type="submit">Apply</button>
               </form>
-              <div className="view-switcher" aria-label="Catalog view options">
-                <button className="active" type="button" title="List view"><List size={16} /></button>
-                <button type="button" title="Grid view" disabled><Grid2X2 size={16} /></button>
-              </div>
             </div>
 
+            {filters?.image === "missing" ? (
+              <p className="notice">Showing products without a photo. <a href="/items">Show all products</a></p>
+            ) : null}
             <div className="mini-stats">
               <span><strong>{activeCount}</strong> active</span>
               <span><strong>{pendingImageCount}</strong> image pending</span>
@@ -209,10 +199,9 @@ export default async function ItemsPage({
                         <td><span className={item.barcode ? "badge success" : "badge neutral"}>{item.barcode ? "Ready" : "Pending"}</span></td>
                         <td>
                           <div className="icon-row">
-                            <details className="item-editor">
-                              <summary className="icon-button" title="View and edit product"><Pencil size={16} /></summary>
+                            <PopoverDetails className="item-editor" summaryClassName="icon-button" summaryTitle="View and edit product" panelClassName="item-editor-panel" summary={<Pencil size={16} />}>
                               <ItemEditor item={item} units={units} taxRates={taxRates} categories={categories} subcategories={subcategories} mode="edit" />
-                            </details>
+                            </PopoverDetails>
                             <form action="/api/items/duplicate" method="post">
                               <input type="hidden" name="itemId" value={item.id} />
                               <button className="icon-button" title="Duplicate item" type="submit"><Copy size={16} /></button>
@@ -231,10 +220,9 @@ export default async function ItemsPage({
             )}
           </section>
 
-          <details className="add-item-drawer" id="add-item">
-            <summary><PackagePlus size={18} /> Add New Item</summary>
+          <PopoverDetails id="add-item" className="add-item-drawer" panelClassName="item-editor-panel" summary={<><PackagePlus size={18} /> Add New Item</>}>
             <ItemEditor units={units} taxRates={taxRates} categories={categories} subcategories={subcategories} mode="create" />
-          </details>
+          </PopoverDetails>
         </main>
       </div>
       <form id={BULK_ITEMS_FORM_ID} action="/api/items/delete/bulk" method="post" hidden />
@@ -268,10 +256,10 @@ function ItemEditor({
   taxRates: TaxRateForForm[];
 }) {
   return (
-    <div className="item-editor-panel">
+    <>
       <div className="item-editor-top">
         <div>
-          <a className="button subtle tiny" href="/items">Back to List</a>
+          <button className="button subtle tiny" type="button" data-popover-close="">Back to List</button>
           <strong>{mode === "edit" ? `Edit Item: ${item?.sku || item?.name}` : "Add Item"}</strong>
         </div>
         <div className="toolbar">
@@ -317,7 +305,7 @@ function ItemEditor({
           )}
         </aside>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -420,61 +408,73 @@ function ItemFields({
 
 function ImportPanel() {
   return (
-    <div className="floating-panel import-panel">
-      <h2><FileSpreadsheet size={18} /> Excel Import - Phase 1</h2>
+    <>
+      <h2><FileSpreadsheet size={18} /> Import products from Excel</h2>
       <div className="modal-title">
-        <strong>Import Items from Excel/CSV</strong>
-        <span>Upload your product catalog to quickly add multiple items.</span>
+        <strong>Add or update many products at once</strong>
+        <span>Rows are matched by item code (SKU): matching products are updated, the rest are added. Blank cells leave existing values unchanged.</span>
       </div>
       <div className="template-callout">
         <div>
-          <strong>Download Template</strong>
-          <span>Get the Excel template with sample data</span>
+          <strong>Start from the template</strong>
+          <span>Or export your products, edit the file in Excel, and import it back.</span>
         </div>
         <a className="button subtle" href="/api/items/template"><Download size={15} /> Template</a>
       </div>
-      <div className="upload-zone">
+      <form className="upload-zone" action="/api/items/import" method="post" encType="multipart/form-data">
         <Upload size={30} />
-        <h3>Upload Excel or CSV file</h3>
-        <p className="muted">Supports .xlsx, .xls, and .csv files up to 10MB. Backend import approval is reserved for the next phase.</p>
-        <button className="button subtle" type="button"><Upload size={15} /> Choose File</button>
-      </div>
-    </div>
+        <h3>Upload Excel (.xlsx) or CSV file</h3>
+        <p className="muted">First row must be the column headings. Up to 5,000 products and 10 MB per file. Old .xls files: save as .xlsx first.</p>
+        <input name="file" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+        <button className="button" type="submit"><Upload size={15} /> Import products</button>
+      </form>
+    </>
   );
 }
 
 function BulkImagePanel() {
   return (
-    <div className="floating-panel image-panel">
-      <h2><ImagePlus size={18} /> Bulk Image Upload - Phase 2</h2>
+    <>
+      <h2><ImagePlus size={18} /> Upload product photos</h2>
       <div className="modal-title">
-        <strong>Bulk Image Upload</strong>
-        <span>Upload multiple product images and link them to your items.</span>
+        <strong>Link many photos at once</strong>
+        <span>Each photo is matched to the product whose item code is the file name.</span>
       </div>
       <div className="tips-box">
-        <strong>Pro Tips</strong>
-        <span>Name your images with item codes for auto-matching, for example IND-0001.jpg.</span>
-        <span>Supported formats: JPEG, PNG, GIF, WebP, max 10MB each.</span>
-        <span>You can upload multiple images per item.</span>
+        <strong>Tips</strong>
+        <span>Name each photo with the item code, for example IND-0001.jpg for item IND-0001.</span>
+        <span>JPG, PNG or WebP, up to 10 MB each.</span>
+        <span>One photo per product: uploading again replaces the old photo.</span>
       </div>
       <form className="upload-zone" action="/api/items/images/bulk" method="post" encType="multipart/form-data">
         <ImagePlus size={34} />
-        <h3>Upload Product Images</h3>
-        <p className="muted">Drag and drop multiple images or click to browse.</p>
+        <h3>Choose product photos</h3>
+        <p className="muted">Select several photos at once.</p>
         <input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required />
-        <button className="button subtle" type="submit"><Upload size={15} /> Upload Images</button>
+        <button className="button" type="submit"><Upload size={15} /> Upload photos</button>
       </form>
-    </div>
+    </>
   );
 }
 
-function ToolPanel({ description, icon, title }: { description: string; icon: React.ReactNode; title: string }) {
+function FixImagesPanel({ missing, filtered }: { missing: number; filtered: boolean }) {
   return (
-    <div className="floating-panel compact-floating">
-      {icon}
-      <h2>{title}</h2>
-      <p className="muted">{description}</p>
-    </div>
+    <>
+      <Wrench size={26} />
+      <h2>Products without a photo</h2>
+      <p className="muted">
+        {missing === 0
+          ? "Every product in this view has a photo."
+          : `${missing} product${missing === 1 ? "" : "s"} in this view ${missing === 1 ? "has" : "have"} no photo yet. Show them, then add photos one by one with the pencil button, or all at once with Bulk Images.`}
+      </p>
+      <div className="toolbar">
+        {filtered ? (
+          <a className="button subtle" href="/items" data-popover-close="">Show all products</a>
+        ) : (
+          <a className="button" href="/items?image=missing" data-popover-close="">Show products without photos</a>
+        )}
+      </div>
+    </>
   );
 }
 

@@ -37,6 +37,15 @@ export async function GET(request: Request) {
     "Sale rate",
     "Currency",
     "Active",
+    "Material",
+    "Finish",
+    "Country of origin",
+    "Gross weight KG",
+    "Length CM",
+    "Width CM",
+    "Height CM",
+    "Units per carton",
+    "MOQ",
     "Image status"
   ];
   const rows = items.map((item) => [
@@ -54,6 +63,15 @@ export async function GET(request: Request) {
     item.saleRate?.toString(),
     item.currency,
     item.isActive ? "Active" : "Inactive",
+    item.material,
+    item.finish,
+    item.countryOfOrigin,
+    item.grossWeightKg?.toString(),
+    item.lengthCm?.toString(),
+    item.widthCm?.toString(),
+    item.heightCm?.toString(),
+    item.unitsPerCarton,
+    item.moq,
     item.imageStatus
   ]);
 
@@ -62,7 +80,7 @@ export async function GET(request: Request) {
   return new Response(`${csv}\n`, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": "attachment; filename=items-catalog.csv"
+      "Content-Disposition": "attachment; filename=products.csv"
     }
   });
 }

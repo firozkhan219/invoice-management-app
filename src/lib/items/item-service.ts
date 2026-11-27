@@ -12,6 +12,8 @@ export type ItemListFilters = {
   category?: string;
   status?: string;
   sort?: string;
+  /** "missing": products without a linked photo. */
+  image?: string;
 };
 
 export async function listItemMasters(context: TenantContext, filters: ItemListFilters = {}) {
@@ -31,6 +33,7 @@ export async function listItemMasters(context: TenantContext, filters: ItemListF
     ...(filters.status === "active" ? { isActive: true } : {}),
     ...(filters.status === "inactive" ? { isActive: false } : {}),
     ...(filters.category ? { category: filters.category } : {}),
+    ...(filters.image === "missing" ? { AND: [{ OR: [{ imageAssetId: null }, { imageStatus: { not: "linked" } }] }] } : {}),
     ...(filters.q
       ? {
           OR: [
