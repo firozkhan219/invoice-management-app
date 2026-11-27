@@ -12,7 +12,16 @@ const headers = [
   "taxRateName",
   "saleRate",
   "currency",
-  "isActive"
+  "isActive",
+  "material",
+  "finish",
+  "countryOfOrigin",
+  "grossWeightKg",
+  "lengthCm",
+  "widthCm",
+  "heightCm",
+  "unitsPerCarton",
+  "moq"
 ];
 
 const sample = [
@@ -29,7 +38,16 @@ const sample = [
   "GST 12%",
   "1200.00",
   "INR",
-  "true"
+  "true",
+  "Brass",
+  "Antique gold",
+  "India",
+  "1.8000",
+  "30",
+  "20",
+  "15",
+  "12",
+  "50"
 ];
 
 export async function GET() {
